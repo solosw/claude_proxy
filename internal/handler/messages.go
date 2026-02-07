@@ -1,0 +1,324 @@
+package handler
+
+import (
+	"encoding/json"
+	"io"
+	"net/http"
+	"strings"
+
+	"github.com/gin-gonic/gin"
+
+	"awesomeProject/internal/combo"
+	appconfig "awesomeProject/internal/config"
+	"awesomeProject/internal/model"
+	"awesomeProject/internal/translator/messages"
+	"awesomeProject/pkg/utils"
+)
+
+// MessagesHandler 提供 Anthropic 兼容的 /v1/messages 入口，供 Claude Code 调用。
+type MessagesHandler struct {
+	cfg *appconfig.Config
+}
+
+func NewMessagesHandler(cfg *appconfig.Config) *MessagesHandler {
+	return &MessagesHandler{cfg: cfg}
+}
+
+// RegisterRoutes 在给定路由组上注册 /v1/messages（完整路径 = 组前缀 + /v1/messages，如 /back/v1/messages）。
+func (h *MessagesHandler) RegisterRoutes(r gin.IRoutes) {
+	r.POST("/v1/messages", h.handleMessages)
+	r.POST("/v1/messages/count_tokens", h.handleCountTokens)
+	r.OPTIONS("/v1/messages", h.handleOptions)
+	r.OPTIONS("/v1/messages/count_tokens", h.handleOptions)
+}
+
+// RegisterRoutesV1 在「已带 /v1 前缀」的路由组上注册 /messages 与 /messages/count_tokens（完整路径 = 组前缀 + /messages，如 /v1/messages）。
+func (h *MessagesHandler) RegisterRoutesV1(r gin.IRoutes) {
+	r.POST("/messages", h.handleMessages)
+	r.POST("/messages/count_tokens", h.handleCountTokens)
+	r.OPTIONS("/messages", h.handleOptions)
+	r.OPTIONS("/messages/count_tokens", h.handleOptions)
+}
+
+func (h *MessagesHandler) handleOptions(c *gin.Context) {
+	c.Status(http.StatusNoContent)
+}
+
+func (h *MessagesHandler) handleMessages(c *gin.Context) {
+	// 每次请求打一条日志，便于确认「重启后持续请求」来自客户端自动重试（如 Claude Code/Cursor）；关闭对应对话会话即可停止重试。
+	ua := c.GetHeader("User-Agent")
+	if len(ua) > 80 {
+		ua = ua[:80] + "..."
+	}
+	utils.Logger.Printf("[ClaudeRouter] messages: request path=%s remote=%s user_agent=%s", c.Request.URL.Path, c.ClientIP(), ua)
+	raw, err := c.GetRawData()
+	if err != nil {
+		utils.Logger.Printf("[ClaudeRouter] messages: step=read_body err=%v", err)
+		c.JSON(http.StatusBadRequest, gin.H{"error": "failed to read body"})
+		return
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		utils.Logger.Printf("[ClaudeRouter] messages: step=parse_json err=%v", err)
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid json"})
+		return
+	}
+
+	requestedModel, _ := payload["model"].(string)
+	requestedModel = strings.TrimSpace(requestedModel)
+	if requestedModel == "" {
+		utils.Logger.Printf("[ClaudeRouter] messages: step=validate missing model")
+		c.JSON(http.StatusBadRequest, gin.H{"error": "missing model"})
+		return
+	}
+
+	stream := false
+	if v, ok := payload["stream"].(bool); ok {
+		stream = v
+	}
+	utils.Logger.Printf("[ClaudeRouter] messages: step=resolve_model requested=%s stream=%v", requestedModel, stream)
+
+	inputText := extractAnthropicInputText(payload)
+	var targetModel *model.Model
+
+	cb, cbErr := model.GetCombo(requestedModel)
+	if cbErr == nil && cb != nil && cb.Enabled {
+		chosenID := combo.ChooseModelID(cb, inputText)
+		if chosenID == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "combo has no selectable items"})
+			return
+		}
+		m, err := model.GetModel(chosenID)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "combo item model not found: " + chosenID})
+			return
+		}
+		targetModel = m
+		utils.Logger.Printf("[ClaudeRouter] messages: step=resolve_model combo chosen=%s", chosenID)
+	} else {
+		m, err := model.GetModel(requestedModel)
+		if err == nil {
+			targetModel = m
+		}
+	}
+
+	if targetModel == nil {
+		utils.Logger.Printf("[ClaudeRouter] messages: step=resolve_model err=not_found model=%s", requestedModel)
+		c.JSON(http.StatusBadRequest, gin.H{"error": "model not found: " + requestedModel})
+		return
+	}
+
+	if !targetModel.Enabled {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "model disabled: " + targetModel.ID})
+		return
+	}
+
+	upstreamID := strings.TrimSpace(targetModel.UpstreamID)
+	if upstreamID == "" {
+		upstreamID = requestedModel
+	}
+
+	interfaceType := strings.TrimSpace(targetModel.Interface)
+	apiKey := strings.TrimSpace(targetModel.APIKey)
+	baseURL := strings.TrimRight(strings.TrimSpace(targetModel.BaseURL), "/")
+
+	// 若模型归属运营商，仅使用该运营商的转发逻辑；BaseURL/APIKey 优先用模型自身的，缺省时才用运营商配置
+	if operatorID := strings.TrimSpace(targetModel.OperatorID); operatorID != "" {
+		if h.cfg == nil || h.cfg.Operators == nil {
+			utils.Logger.Printf("[ClaudeRouter] messages: step=operator err=no_config operator=%s", operatorID)
+			c.JSON(http.StatusBadRequest, gin.H{"error": "operator config not available"})
+			return
+		}
+		ep, ok := h.cfg.Operators[operatorID]
+		if !ok {
+			utils.Logger.Printf("[ClaudeRouter] messages: step=operator err=not_found operator=%s", operatorID)
+			c.JSON(http.StatusBadRequest, gin.H{"error": "operator not found: " + operatorID})
+			return
+		}
+		if !ep.Enabled {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "operator disabled: " + operatorID})
+			return
+		}
+		if apiKey == "" {
+			apiKey = strings.TrimSpace(ep.APIKey)
+		}
+		if baseURL == "" {
+			baseURL = strings.TrimRight(strings.TrimSpace(ep.BaseURL), "/")
+		}
+		if t := strings.TrimSpace(ep.Interface); t != "" {
+			interfaceType = t
+		}
+		utils.Logger.Printf("[ClaudeRouter] messages: step=operator using operator=%s (forwarding only, url/key from model when set)", operatorID)
+	}
+	if interfaceType == "" {
+		interfaceType = "anthropic"
+	}
+	if baseURL == "" {
+		switch interfaceType {
+		case "openai", "openai_compatible":
+			baseURL = "https://api.openai.com"
+		default:
+			baseURL = "https://api.anthropic.com"
+		}
+	}
+
+	// 按模型配置决定是否保留扩展字段（metadata、thinking），避免上游 422
+	payloadToSend := applyForwardExtendedFields(payload, targetModel.ForwardMetadata, targetModel.ForwardThinking)
+
+	// 按模型配置的 QPS 限流
+	waitModelQPS(c.Request.Context(), targetModel.ID, targetModel.MaxQPS)
+	if c.Request.Context().Err() != nil {
+		utils.Logger.Printf("[ClaudeRouter] messages: client_gone during qps wait")
+		return
+	}
+
+	opts := messages.ExecuteOptions{
+		UpstreamModel: upstreamID,
+		APIKey:        apiKey,
+		BaseURL:       baseURL,
+		Stream:        stream,
+	}
+
+	// 策略分发：有运营商则走该运营商的独立转发策略，否则走 interface_type 适配器（openai/anthropic）
+	var statusCode int
+	var contentType string
+	var body []byte
+	var streamBody io.ReadCloser
+
+	operatorID := strings.TrimSpace(targetModel.OperatorID)
+	if operatorID != "" {
+		strategy := messages.OperatorRegistry.Get(operatorID)
+		if strategy == nil {
+			utils.Logger.Printf("[ClaudeRouter] messages: step=operator err=strategy_not_registered operator=%s", operatorID)
+			c.JSON(http.StatusBadRequest, gin.H{"error": "operator strategy not registered: " + operatorID})
+			return
+		}
+		utils.Logger.Printf("[ClaudeRouter] messages: step=execute_call operator=%s", operatorID)
+		statusCode, contentType, body, streamBody, err = strategy.Execute(c.Request.Context(), payloadToSend, opts)
+	} else {
+		adapter := messages.Registry.GetOrDefault(interfaceType)
+		if adapter == nil {
+			utils.Logger.Printf("[ClaudeRouter] messages: step=adapter err=unsupported type=%s", interfaceType)
+			c.JSON(http.StatusBadRequest, gin.H{"error": "unsupported interface_type: " + interfaceType})
+			return
+		}
+		utils.Logger.Printf("[ClaudeRouter] messages: step=execute_call adapter=%s upstream_model=%s", interfaceType, upstreamID)
+		statusCode, contentType, body, streamBody, err = adapter.Execute(c.Request.Context(), payloadToSend, opts)
+	}
+	utils.Logger.Printf("[ClaudeRouter] messages: step=execute_done status=%d contentType=%s bodyLen=%d streamBody=%v err=%v", statusCode, contentType, len(body), streamBody != nil, err)
+
+	if err != nil {
+		utils.Logger.Printf("[ClaudeRouter] messages: step=execute_err err=%v", err)
+		if c.Request.Context().Err() != nil {
+			utils.Logger.Printf("[ClaudeRouter] messages: client_gone, skip error response")
+			return
+		}
+		if statusCode >= 400 {
+			ct := contentType
+			if ct == "" {
+				ct = "application/json"
+			}
+			c.Data(statusCode, ct, body)
+			return
+		}
+		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
+		return
+	}
+
+	if c.Request.Context().Err() != nil {
+		utils.Logger.Printf("[ClaudeRouter] messages: client_gone, skip response")
+		if streamBody != nil {
+			_ = streamBody.Close()
+		}
+		return
+	}
+
+	if statusCode < 200 || statusCode >= 300 {
+		utils.Logger.Printf("[ClaudeRouter] messages: step=upstream_non_2xx status=%d", statusCode)
+		ct := contentType
+		if ct == "" {
+			ct = "application/json"
+		}
+		c.Data(statusCode, ct, body)
+		return
+	}
+
+	if stream && streamBody != nil {
+		utils.Logger.Printf("[ClaudeRouter] messages: step=stream_write")
+		defer streamBody.Close()
+		utils.ProxySSE(c, streamBody)
+		return
+	}
+
+	utils.Logger.Printf("[ClaudeRouter] messages: step=write_response status=%d len=%d", statusCode, len(body))
+	ct := contentType
+	if ct == "" {
+		ct = "application/json"
+	}
+	c.Data(statusCode, ct, body)
+}
+
+// handleCountTokens 实现 Anthropic 兼容的 POST /v1/messages/count_tokens（桩实现）。
+func (h *MessagesHandler) handleCountTokens(c *gin.Context) {
+	c.JSON(http.StatusOK, gin.H{"input_tokens": 0})
+}
+
+// applyForwardExtendedFields 根据模型配置返回一份 payload 副本，未开启转发的扩展字段（metadata、thinking）会被移除，避免上游 422。
+func applyForwardExtendedFields(payload map[string]any, forwardMetadata, forwardThinking bool) map[string]any {
+	if payload == nil {
+		return nil
+	}
+	out := make(map[string]any, len(payload))
+	for k, v := range payload {
+		out[k] = v
+	}
+	if !forwardMetadata {
+		delete(out, "metadata")
+	}
+	if !forwardThinking {
+		delete(out, "thinking")
+	}
+	return out
+}
+
+// extractAnthropicInputText 从 Anthropic messages 请求 payload 中提取可用于关键词判断的输入文本。
+func extractAnthropicInputText(payload map[string]any) string {
+	var sb strings.Builder
+	if sys, ok := payload["system"].(string); ok && strings.TrimSpace(sys) != "" {
+		sb.WriteString(sys)
+		sb.WriteString("\n")
+	}
+	msgs, ok := payload["messages"].([]any)
+	if !ok {
+		return sb.String()
+	}
+	for _, m := range msgs {
+		mm, ok := m.(map[string]any)
+		if !ok {
+			continue
+		}
+		switch content := mm["content"].(type) {
+		case string:
+			if strings.TrimSpace(content) != "" {
+				sb.WriteString(content)
+				sb.WriteString("\n")
+			}
+		case []any:
+			for _, blk := range content {
+				bm, ok := blk.(map[string]any)
+				if !ok {
+					continue
+				}
+				if t, _ := bm["type"].(string); t != "" && t != "text" {
+					continue
+				}
+				if txt, ok := bm["text"].(string); ok && strings.TrimSpace(txt) != "" {
+					sb.WriteString(txt)
+					sb.WriteString("\n")
+				}
+			}
+		}
+	}
+	return sb.String()
+}

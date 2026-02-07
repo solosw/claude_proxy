@@ -1,0 +1,25 @@
+package model
+
+// Model 表示一个可用的底层模型（OpenAI / Anthropic 等），可被直接调用或被组合模型引用。
+type Model struct {
+	ID          string `json:"id" gorm:"primaryKey"`   // 唯一 ID，例如 "openai:gpt-4.1"
+	Name        string `json:"name"`                   // 展示名，例如 "GPT-4.1"
+	Provider    string `json:"provider"`               // 对应 providers 配置中的 key，例如 "openai" / "anthropic"
+	Interface   string `json:"interface_type"`         // 接口类型：如 openai、anthropic、openai_compatible 等
+	UpstreamID  string `json:"upstream_id"`           // 提供商实际的 model 名称，例如 "gpt-4.1" / "claude-3-5-sonnet-20241022"
+	APIKey      string `json:"api_key"`               // 上游模型服务商的专用 API Key（覆盖 ProviderConfig.api_key）
+	BaseURL     string `json:"base_url"`              // 可选：为该模型单独设置上游 BaseURL，优先级高于 Provider 的 BaseURL
+	Description string `json:"description"`           // 描述
+	Enabled     bool   `json:"enabled"`               // 是否启用
+
+	// 扩展字段是否转发到上游（Claude Code 会带 metadata、thinking 等，部分上游如 ModelScope 不支持则关闭）
+	ForwardMetadata bool `json:"forward_metadata"` // 是否将请求中的 metadata 转发到上游
+	ForwardThinking bool `json:"forward_thinking"` // 是否将 thinking（extended thinking）转发到上游
+
+	// 该模型最大 QPS，0 表示不限制
+	MaxQPS float64 `json:"max_qps"`
+
+	// 若不为空，表示该模型归属该运营商，请求走运营商专属 API（BaseURL、APIKey 以运营商为准）
+	OperatorID string `json:"operator_id"`
+}
+

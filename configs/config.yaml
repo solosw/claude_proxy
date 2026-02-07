@@ -1,0 +1,46 @@
+server:
+  addr: "localhost:8090"
+
+log:
+  level: info
+
+database:
+  driver: sqlite
+  dsn: "./data/claude_router.db"
+
+auth:
+  # 访问 ClaudeRouter 的全局 API Key（前端登录和 Claude Code 都使用这个 key）
+  api_key: "123456"
+
+# 系统内置运营商：选择某运营商的模型使用该运营商的转发逻辑；BaseURL/APIKey 优先用模型配置，缺省时才用此处。
+operators:
+  # Minimax：仅替换认证 API Key，使用模型自身的 Base URL 请求，不做复杂协议转换
+  minimax:
+    name: "Minimax"
+    description: "仅替换认证 API Key，使用模型自身 URL 请求"
+    enabled: true
+    base_url: ""
+    api_key: ""
+    interface_type: "anthropic"
+  glm:
+    name: "Glm"
+    description: "仅替换认证 API Key，使用模型自身 URL 请求"
+    enabled: true
+    base_url: ""
+    api_key: ""
+    interface_type: "anthropic"
+  kimi:
+    name: "Kimi"
+    description: "仅替换认证 API Key，使用模型自身 URL 请求"
+    enabled: true
+    base_url: ""
+    api_key: ""
+    interface_type: "anthropic"
+  # iFlow 心流：OpenAI 兼容 /v1/chat/completions，默认 https://apis.iflow.cn，认证 Bearer <api key>
+  iflow:
+    name: "iFlow"
+    description: "心流开放平台，OpenAI 兼容接口"
+    enabled: true
+    base_url: "https://apis.iflow.cn"
+    api_key: ""
+    interface_type: "openai_compatible"
