@@ -12,6 +12,8 @@ type ExecuteOptions struct {
 	APIKey        string
 	BaseURL       string
 	Stream        bool
+	// MinimalOpenAI 为 true 时，OpenAI 适配器只发 model/messages/max_tokens/stream/temperature/top_p，不带 tools、tool_choice，避免部分网关（如 NewAPI）WAF 误拦。
+	MinimalOpenAI bool
 }
 
 // Adapter 协议适配器：入口为 Anthropic /v1/messages 格式，通过 SDK 请求上游并返回 Anthropic 格式。

@@ -1,6 +1,8 @@
 package messages
 
 import (
+	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -68,14 +70,16 @@ func (a *OpenAIAdapter) Execute(ctx context.Context, payload map[string]any, opt
 		f := float32(v)
 		oaiReq.TopP = f
 	}
-	if toolsIn, ok := payload["tools"].([]any); ok && len(toolsIn) > 0 {
-		oaiReq.Tools = openAIToolsToSDK(anthropicToolsToOpenAI(toolsIn))
-		oaiReq.ToolChoice = "auto"
-		if tc, ok := payload["tool_choice"].(map[string]any); ok {
-			if v, _ := tc["type"].(string); v == "none" {
-				oaiReq.ToolChoice = "none"
-			} else if name, _ := tc["name"].(string); v == "tool" && name != "" {
-				oaiReq.ToolChoice = map[string]any{"type": "function", "function": map[string]any{"name": name}}
+	if !opts.MinimalOpenAI {
+		if toolsIn, ok := payload["tools"].([]any); ok && len(toolsIn) > 0 {
+			oaiReq.Tools = openAIToolsToSDK(anthropicToolsToOpenAI(toolsIn))
+			oaiReq.ToolChoice = "auto"
+			if tc, ok := payload["tool_choice"].(map[string]any); ok {
+				if v, _ := tc["type"].(string); v == "none" {
+					oaiReq.ToolChoice = "none"
+				} else if name, _ := tc["name"].(string); v == "tool" && name != "" {
+					oaiReq.ToolChoice = map[string]any{"type": "function", "function": map[string]any{"name": name}}
+				}
 			}
 		}
 	}
@@ -541,4 +545,75 @@ func (e *protocolError) Error() string { return e.msg }
 func writeSSE(w io.Writer, event, data string) {
 	io.WriteString(w, "event: "+event+"\n")
 	io.WriteString(w, "data: "+data+"\n\n")
+}
+
+// openAIStreamChunk 用于解析 OpenAI 流式 SSE 的 data 行（仅需 delta）。
+type openAIStreamChunk struct {
+	Choices []struct {
+		Delta  struct { Content string `json:"content"` }
+		Finish *string `json:"finish_reason"`
+	} `json:"choices"`
+}
+
+// ConvertOpenAIStreamReaderToAnthropic 从原始 OpenAI SSE io.Reader 读 chunk，写入 Anthropic 格式到 w；供 NewAPI 等自建 HTTP 的适配器使用。
+func ConvertOpenAIStreamReaderToAnthropic(ctx context.Context, r io.Reader, w io.Writer) {
+	scanner := bufio.NewScanner(r)
+	scanner.Buffer(nil, 512*1024)
+	first := true
+	for scanner.Scan() {
+		if ctx.Err() != nil {
+			return
+		}
+		line := scanner.Bytes()
+		if len(line) < 6 || string(line[:5]) != "data:" {
+			continue
+		}
+		data := bytes.TrimSpace(line[5:])
+		if len(data) == 0 {
+			continue
+		}
+		if bytes.Equal(data, []byte("[DONE]")) {
+			if first {
+				writeSSE(w, "message_start", `{"type":"message_start","message":{"id":"","type":"message","role":"assistant","content":[],"model":""}}`)
+				writeSSE(w, "content_block_start", `{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`)
+				writeSSE(w, "content_block_stop", `{"type":"content_block_stop","index":0}`)
+				writeSSE(w, "message_delta", `{"type":"message_delta","delta":{"stop_reason":"end_turn"}}`)
+			}
+			writeSSE(w, "message_stop", `{"type":"message_stop"}`)
+			return
+		}
+		var chunk openAIStreamChunk
+		if json.Unmarshal(data, &chunk) != nil || len(chunk.Choices) == 0 {
+			continue
+		}
+		delta := chunk.Choices[0].Delta.Content
+		finish := ""
+		if chunk.Choices[0].Finish != nil {
+			finish = *chunk.Choices[0].Finish
+		}
+		if first {
+			first = false
+			writeSSE(w, "message_start", `{"type":"message_start","message":{"id":"","type":"message","role":"assistant","content":[],"model":""}}`)
+			writeSSE(w, "content_block_start", `{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`)
+		}
+		if delta != "" {
+			escaped, _ := json.Marshal(delta)
+			writeSSE(w, "content_block_delta", `{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":`+string(escaped)+`}}`)
+		}
+		if finish != "" {
+			stopReason := mapFinishReason(finish)
+			stopJSON, _ := json.Marshal(stopReason)
+			writeSSE(w, "content_block_stop", `{"type":"content_block_stop","index":0}`)
+			writeSSE(w, "message_delta", `{"type":"message_delta","delta":{"stop_reason":`+string(stopJSON)+`}}`)
+			writeSSE(w, "message_stop", `{"type":"message_stop"}`)
+			return
+		}
+	}
+	if first {
+		writeSSE(w, "message_start", `{"type":"message_start","message":{"id":"","type":"message","role":"assistant","content":[],"model":""}}`)
+		writeSSE(w, "content_block_start", `{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`)
+		writeSSE(w, "content_block_stop", `{"type":"content_block_stop","index":0}`)
+		writeSSE(w, "message_delta", `{"type":"message_delta","delta":{"stop_reason":"end_turn"}}`)
+	}
+	writeSSE(w, "message_stop", `{"type":"message_stop"}`)
 }

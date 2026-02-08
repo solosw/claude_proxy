@@ -52,3 +52,11 @@ operators:
     base_url: "https://apis.iflow.cn"
     api_key: ""
     interface_type: "openai_compatible"
+  # NewAPI：OpenAI Chat Completions，使用最小请求体避免网关 WAF 403。文档 https://docs.newapi.pro/zh/docs/api/ai-model/chat/openai/createchatcompletion
+  newapi:
+    name: "NewAPI"
+    description: "NewAPI OpenAI 兼容，最小请求体"
+    enabled: true
+    base_url: "https://api.newapi.pro"
+    api_key: ""
+    interface_type: "openai_compatible"
