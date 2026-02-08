@@ -481,84 +481,134 @@ onMounted(() => {
 </template>
 
 <style scoped>
+.p-6 {
+  animation: fadeInUp 0.6s ease-out;
+}
+
 .dialog-footer {
   display: flex;
   justify-content: flex-end;
-  gap: 8px;
+  gap: 12px;
 }
 
 .form-hint {
   font-size: 12px;
   color: #6b7280;
-  margin-top: 4px;
+  margin-top: 8px;
+  padding: 8px 12px;
+  background: rgba(102, 126, 234, 0.05);
+  border-left: 3px solid #667eea;
+  border-radius: 4px;
 }
 
 .form-hint-inline {
   font-size: 12px;
   color: #6b7280;
-  margin-left: 8px;
+  margin-left: 12px;
+  font-style: italic;
 }
 
 .chat-toolbar {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 12px;
+  margin-bottom: 16px;
+  padding: 12px;
+  background: linear-gradient(135deg, rgba(102, 126, 234, 0.1), rgba(240, 147, 251, 0.1));
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
 }
 
 .chat-meta-title {
-  font-weight: 600;
+  font-weight: 700;
+  font-size: 16px;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
 }
 
 .chat-meta-sub {
   font-size: 12px;
   color: #6b7280;
+  margin-top: 4px;
 }
 
 .chat-messages {
   height: calc(100vh - 260px);
   overflow: auto;
-  padding: 8px 4px;
-  background: #f3f4f6;
-  border-radius: 10px;
+  padding: 12px;
+  background: rgba(255, 255, 255, 0.5);
+  backdrop-filter: blur(10px);
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
 }
 
 .chat-bubble {
   max-width: 92%;
-  padding: 10px 12px;
-  margin: 8px 6px;
-  border-radius: 12px;
+  padding: 12px 16px;
+  margin: 10px 8px;
+  border-radius: 14px;
   white-space: pre-wrap;
   word-break: break-word;
+  animation: fadeInUp 0.3s ease-out;
+  transition: all 0.2s ease;
 }
 
 .from-user {
   margin-left: auto;
-  background: #2563eb;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
   color: #fff;
+  box-shadow: 0 4px 12px rgba(102, 126, 234, 0.3);
+}
+
+.from-user:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 16px rgba(102, 126, 234, 0.4);
 }
 
 .from-assistant {
   margin-right: auto;
-  background: #ffffff;
+  background: rgba(255, 255, 255, 0.8);
   color: #111827;
-  border: 1px solid #e5e7eb;
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
+}
+
+.from-assistant:hover {
+  background: rgba(255, 255, 255, 0.95);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
 }
 
 .chat-role {
   font-size: 11px;
-  opacity: 0.8;
-  margin-bottom: 4px;
+  opacity: 0.7;
+  margin-bottom: 6px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
 }
 
 .chat-input {
-  margin-top: 12px;
+  margin-top: 16px;
 }
 
 .chat-send {
   display: flex;
   justify-content: flex-end;
-  margin-top: 8px;
+  margin-top: 12px;
+  gap: 8px;
+}
+
+@keyframes fadeInUp {
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 </style>
 

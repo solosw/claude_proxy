@@ -43,22 +43,38 @@ const handleMenuSelect = (path) => {
 
 <style scoped>
 .aside {
-  border-right: 1px solid #e5e7eb;
-  background-color: #ffffff;
+  background: rgba(30, 30, 46, 0.7) !important;
+  backdrop-filter: blur(10px);
+  border-right: 1px solid rgba(255, 255, 255, 0.1) !important;
+  box-shadow: 4px 0 20px rgba(0, 0, 0, 0.1);
+  transition: all 0.3s ease;
 }
 
 .logo {
-  height: 56px;
+  height: 64px;
   display: flex;
   align-items: center;
-  padding: 0 16px;
-  font-weight: 600;
-  font-size: 18px;
-  border-bottom: 1px solid #e5e7eb;
+  padding: 0 20px;
+  font-weight: 700;
+  font-size: 20px;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  letter-spacing: 1px;
+  transition: all 0.3s ease;
+  cursor: pointer;
+}
+
+.logo:hover {
+  transform: scale(1.05);
+  filter: drop-shadow(0 0 8px rgba(102, 126, 234, 0.4));
 }
 
 .main {
-  background-color: #f3f4f6;
+  background: transparent !important;
+  padding: 24px;
 }
 </style>
 

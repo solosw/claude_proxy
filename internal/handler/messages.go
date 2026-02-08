@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 
 	"github.com/gin-gonic/gin"
 
@@ -13,6 +14,12 @@ import (
 	"awesomeProject/internal/model"
 	"awesomeProject/internal/translator/messages"
 	"awesomeProject/pkg/utils"
+)
+
+// 对话级模型只选一次：依据 payload.metadata.user_id 判断是否同一对话，首次解析并缓存模型，后续同 user_id 使用缓存模型。
+var (
+	conversationModelMu sync.RWMutex
+	conversationModel   = make(map[string]string) // metadata.user_id -> model_id
 )
 
 // MessagesHandler 提供 Anthropic 兼容的 /v1/messages 入口，供 Claude Code 调用。
@@ -44,6 +51,53 @@ func (h *MessagesHandler) handleOptions(c *gin.Context) {
 	c.Status(http.StatusNoContent)
 }
 
+// anthropicError 按 Claude API 文档返回错误体：{"type":"error","error":{"type":"...","message":"..."}}
+func anthropicError(c *gin.Context, status int, errorType, message string) {
+	c.JSON(status, gin.H{
+		"type": "error",
+		"error": gin.H{
+			"type":    errorType,
+			"message": message,
+		},
+	})
+}
+
+// anthropicErrorFromBody 根据上游状态码和 body 按 Claude 格式返回错误（对话过程中上游 4xx/5xx 时使用）。
+func anthropicErrorFromBody(c *gin.Context, statusCode int, body []byte) {
+	message := "Upstream request failed"
+	if len(body) > 0 {
+		var m map[string]any
+		if json.Unmarshal(body, &m) == nil {
+			if errObj, _ := m["error"].(map[string]any); errObj != nil {
+				if msg, _ := errObj["message"].(string); msg != "" {
+					message = msg
+				}
+			} else if errObj, _ := m["errors"].(map[string]any); errObj != nil {
+				if msg, _ := errObj["message"].(string); msg != "" {
+					message = msg
+				}
+			} else if msg, _ := m["message"].(string); msg != "" {
+				message = msg
+			} else if msg, _ := m["error"].(string); msg != "" {
+				message = msg
+			}
+		} else if len(body) <= 500 {
+			message = string(body)
+		}
+	}
+	errorType := "api_error"
+	if statusCode >= 400 && statusCode < 500 {
+		errorType = "invalid_request_error"
+	}
+	if statusCode == 404 {
+		errorType = "not_found_error"
+	}
+	if statusCode == 429 {
+		errorType = "rate_limit_error"
+	}
+	anthropicError(c, statusCode, errorType, message)
+}
+
 func (h *MessagesHandler) handleMessages(c *gin.Context) {
 	// 每次请求打一条日志，便于确认「重启后持续请求」来自客户端自动重试（如 Claude Code/Cursor）；关闭对应对话会话即可停止重试。
 	ua := c.GetHeader("User-Agent")
@@ -54,22 +108,35 @@ func (h *MessagesHandler) handleMessages(c *gin.Context) {
 	raw, err := c.GetRawData()
 	if err != nil {
 		utils.Logger.Printf("[ClaudeRouter] messages: step=read_body err=%v", err)
-		c.JSON(http.StatusBadRequest, gin.H{"error": "failed to read body"})
+		anthropicError(c, http.StatusBadRequest, "invalid_request_error", "Failed to read body")
 		return
 	}
 
 	var payload map[string]any
 	if err := json.Unmarshal(raw, &payload); err != nil {
 		utils.Logger.Printf("[ClaudeRouter] messages: step=parse_json err=%v", err)
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid json"})
+		anthropicError(c, http.StatusBadRequest, "invalid_request_error", "Invalid JSON")
 		return
 	}
 
 	requestedModel, _ := payload["model"].(string)
 	requestedModel = strings.TrimSpace(requestedModel)
+
+	conversationID := extractMetadataUserID(payload)
+	var cachedModelID string
+	if conversationID != "" {
+		conversationModelMu.RLock()
+		cachedModelID = conversationModel[conversationID]
+		conversationModelMu.RUnlock()
+		if cachedModelID != "" {
+			requestedModel = cachedModelID
+			utils.Logger.Printf("[ClaudeRouter] messages: step=conversation_model cached user_id=%s model=%s", conversationID, requestedModel)
+		}
+	}
+
 	if requestedModel == "" {
 		utils.Logger.Printf("[ClaudeRouter] messages: step=validate missing model")
-		c.JSON(http.StatusBadRequest, gin.H{"error": "missing model"})
+		anthropicError(c, http.StatusBadRequest, "invalid_request_error", "Missing model")
 		return
 	}
 
@@ -82,35 +149,58 @@ func (h *MessagesHandler) handleMessages(c *gin.Context) {
 	inputText := extractAnthropicInputText(payload)
 	var targetModel *model.Model
 
-	cb, cbErr := model.GetCombo(requestedModel)
-	if cbErr == nil && cb != nil && cb.Enabled {
+	if cachedModelID != "" {
+		// 同一对话后续请求：直接用缓存的模型 id 取模型，不再查 combo
+		m, err := model.GetModel(requestedModel)
+		if err != nil {
+			utils.Logger.Printf("[ClaudeRouter] messages: step=resolve_model err=cached_model_gone model=%s", requestedModel)
+			anthropicError(c, http.StatusNotFound, "not_found_error", "Unknown model: "+requestedModel)
+			return
+		}
+		targetModel = m
+		utils.Logger.Printf("[ClaudeRouter] messages: step=resolve_model using_cached model=%s", targetModel.ID)
+	} else {
+		// 对话首条：requestedModel 必须是 combo id，智能选模型后缓存
+		if !model.IsComboID(requestedModel) {
+			utils.Logger.Printf("[ClaudeRouter] messages: step=resolve_model err=unknown_model model=%s", requestedModel)
+			anthropicError(c, http.StatusNotFound, "not_found_error", "Unknown model: "+requestedModel)
+			return
+		}
+		cb, cbErr := model.GetCombo(requestedModel)
+		if cbErr != nil || cb == nil {
+			utils.Logger.Printf("[ClaudeRouter] messages: step=resolve_model err=combo_not_found model=%s", requestedModel)
+			anthropicError(c, http.StatusNotFound, "not_found_error", "Unknown model: "+requestedModel)
+			return
+		}
+		if !cb.Enabled {
+			utils.Logger.Printf("[ClaudeRouter] messages: step=resolve_model err=combo_disabled model=%s", requestedModel)
+			anthropicError(c, http.StatusBadRequest, "invalid_request_error", "Model disabled: "+requestedModel)
+			return
+		}
 		chosenID := combo.ChooseModelID(cb, inputText)
 		if chosenID == "" {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "combo has no selectable items"})
+			anthropicError(c, http.StatusBadRequest, "invalid_request_error", "Combo has no selectable items")
 			return
 		}
 		m, err := model.GetModel(chosenID)
 		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "combo item model not found: " + chosenID})
+			anthropicError(c, http.StatusBadRequest, "invalid_request_error", "Combo item model not found: "+chosenID)
 			return
 		}
 		targetModel = m
 		utils.Logger.Printf("[ClaudeRouter] messages: step=resolve_model combo chosen=%s", chosenID)
-	} else {
-		m, err := model.GetModel(requestedModel)
-		if err == nil {
-			targetModel = m
+		if conversationID != "" {
+			conversationModelMu.Lock()
+			if _, ok := conversationModel[conversationID]; !ok {
+				conversationModel[conversationID] = targetModel.ID
+				utils.Logger.Printf("[ClaudeRouter] messages: step=conversation_model set user_id=%s model=%s", conversationID, targetModel.ID)
+			}
+			conversationModelMu.Unlock()
 		}
 	}
 
-	if targetModel == nil {
-		utils.Logger.Printf("[ClaudeRouter] messages: step=resolve_model err=not_found model=%s", requestedModel)
-		c.JSON(http.StatusBadRequest, gin.H{"error": "model not found: " + requestedModel})
-		return
-	}
-
 	if !targetModel.Enabled {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "model disabled: " + targetModel.ID})
+		anthropicError(c, http.StatusBadRequest, "invalid_request_error", "Model disabled: "+targetModel.ID)
 		return
 	}
 
@@ -127,17 +217,17 @@ func (h *MessagesHandler) handleMessages(c *gin.Context) {
 	if operatorID := strings.TrimSpace(targetModel.OperatorID); operatorID != "" {
 		if h.cfg == nil || h.cfg.Operators == nil {
 			utils.Logger.Printf("[ClaudeRouter] messages: step=operator err=no_config operator=%s", operatorID)
-			c.JSON(http.StatusBadRequest, gin.H{"error": "operator config not available"})
+			anthropicError(c, http.StatusBadRequest, "invalid_request_error", "Operator config not available")
 			return
 		}
 		ep, ok := h.cfg.Operators[operatorID]
 		if !ok {
 			utils.Logger.Printf("[ClaudeRouter] messages: step=operator err=not_found operator=%s", operatorID)
-			c.JSON(http.StatusBadRequest, gin.H{"error": "operator not found: " + operatorID})
+			anthropicError(c, http.StatusBadRequest, "invalid_request_error", "Operator not found: "+operatorID)
 			return
 		}
 		if !ep.Enabled {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "operator disabled: " + operatorID})
+			anthropicError(c, http.StatusBadRequest, "invalid_request_error", "Operator disabled: "+operatorID)
 			return
 		}
 		if apiKey == "" {
@@ -191,7 +281,7 @@ func (h *MessagesHandler) handleMessages(c *gin.Context) {
 		strategy := messages.OperatorRegistry.Get(operatorID)
 		if strategy == nil {
 			utils.Logger.Printf("[ClaudeRouter] messages: step=operator err=strategy_not_registered operator=%s", operatorID)
-			c.JSON(http.StatusBadRequest, gin.H{"error": "operator strategy not registered: " + operatorID})
+			anthropicError(c, http.StatusBadRequest, "invalid_request_error", "Operator strategy not registered: "+operatorID)
 			return
 		}
 		utils.Logger.Printf("[ClaudeRouter] messages: step=execute_call operator=%s", operatorID)
@@ -200,7 +290,7 @@ func (h *MessagesHandler) handleMessages(c *gin.Context) {
 		adapter := messages.Registry.GetOrDefault(interfaceType)
 		if adapter == nil {
 			utils.Logger.Printf("[ClaudeRouter] messages: step=adapter err=unsupported type=%s", interfaceType)
-			c.JSON(http.StatusBadRequest, gin.H{"error": "unsupported interface_type: " + interfaceType})
+			anthropicError(c, http.StatusBadRequest, "invalid_request_error", "Unsupported interface_type: "+interfaceType)
 			return
 		}
 		utils.Logger.Printf("[ClaudeRouter] messages: step=execute_call adapter=%s upstream_model=%s", interfaceType, upstreamID)
@@ -215,14 +305,10 @@ func (h *MessagesHandler) handleMessages(c *gin.Context) {
 			return
 		}
 		if statusCode >= 400 {
-			ct := contentType
-			if ct == "" {
-				ct = "application/json"
-			}
-			c.Data(statusCode, ct, body)
+			anthropicErrorFromBody(c, statusCode, body)
 			return
 		}
-		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
+		anthropicError(c, http.StatusBadGateway, "api_error", err.Error())
 		return
 	}
 
@@ -236,11 +322,7 @@ func (h *MessagesHandler) handleMessages(c *gin.Context) {
 
 	if statusCode < 200 || statusCode >= 300 {
 		utils.Logger.Printf("[ClaudeRouter] messages: step=upstream_non_2xx status=%d", statusCode)
-		ct := contentType
-		if ct == "" {
-			ct = "application/json"
-		}
-		c.Data(statusCode, ct, body)
+		anthropicErrorFromBody(c, statusCode, body)
 		return
 	}
 
@@ -283,6 +365,19 @@ func applyForwardExtendedFields(payload map[string]any, forwardMetadata, forward
 }
 
 // extractAnthropicInputText 从 Anthropic messages 请求 payload 中提取可用于关键词判断的输入文本。
+// extractMetadataUserID 从 payload.metadata.user_id 取出对话标识，用于对话级模型缓存（同一 user_id 只选一次模型）。
+func extractMetadataUserID(payload map[string]any) string {
+	if payload == nil {
+		return ""
+	}
+	meta, _ := payload["metadata"].(map[string]any)
+	if meta == nil {
+		return ""
+	}
+	uid, _ := meta["user_id"].(string)
+	return strings.TrimSpace(uid)
+}
+
 func extractAnthropicInputText(payload map[string]any) string {
 	var sb strings.Builder
 	if sys, ok := payload["system"].(string); ok && strings.TrimSpace(sys) != "" {

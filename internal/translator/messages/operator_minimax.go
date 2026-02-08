@@ -17,11 +17,12 @@ func init() {
 	OperatorRegistry.Register("minimax", &MinimaxStrategy{})
 	OperatorRegistry.Register("glm", &MinimaxStrategy{})
 	OperatorRegistry.Register("kimi", &MinimaxStrategy{})
+	OperatorRegistry.Register("proxy", &MinimaxStrategy{})
 }
 
-// Execute 直接 POST 到模型 BaseURL/v1/messages，仅替换请求头中的认证 API Key，原样转发 body 与响应。
+// Execute 直接 POST 到模型 BaseURL/v1/messages，替换请求头中的 API Key，并将请求体中的 model 改为上游模型 ID。
 func (s *MinimaxStrategy) Execute(ctx context.Context, payload map[string]any, opts ExecuteOptions) (statusCode int, contentType string, body []byte, streamBody io.ReadCloser, err error) {
-	logStep("operator minimax: http forward, replace api key in header")
+	logStep("operator minimax: http forward, replace api key and model")
 
 	baseURL := strings.TrimRight(strings.TrimSpace(opts.BaseURL), "/")
 	if baseURL == "" {
@@ -30,7 +31,16 @@ func (s *MinimaxStrategy) Execute(ctx context.Context, payload map[string]any, o
 	}
 	url := baseURL + "/v1/messages"
 
-	reqBody, err := json.Marshal(payload)
+	// 代理时把请求里的 model 改成上游模型 ID，不修改原 payload
+	bodyPayload := make(map[string]any, len(payload))
+	for k, v := range payload {
+		bodyPayload[k] = v
+	}
+	if opts.UpstreamModel != "" {
+		bodyPayload["model"] = opts.UpstreamModel
+	}
+
+	reqBody, err := json.Marshal(bodyPayload)
 	if err != nil {
 		logStep("operator minimax: err=json marshal %v", err)
 		return 0, "", nil, nil, err

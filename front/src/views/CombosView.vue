@@ -131,8 +131,8 @@ onMounted(loadData);
 
 <template>
   <div class="p-6">
-    <div class="flex items-center justify-between mb-4">
-      <h2 class="text-xl font-semibold">组合模型管理</h2>
+    <div class="header-bar">
+      <h2 class="page-title">组合模型管理</h2>
       <el-button type="primary" @click="openCreate">
         新建组合模型
       </el-button>
@@ -271,10 +271,48 @@ onMounted(loadData);
 </template>
 
 <style scoped>
+.p-6 {
+  animation: fadeInUp 0.6s ease-out;
+}
+
+.header-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 24px;
+  padding: 20px;
+  background: rgba(255, 255, 255, 0.6);
+  backdrop-filter: blur(10px);
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  box-shadow: 0 4px 15px rgba(102, 126, 234, 0.1);
+}
+
+.page-title {
+  font-size: 24px;
+  font-weight: 700;
+  margin: 0;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
 .dialog-footer {
   display: flex;
   justify-content: flex-end;
-  gap: 8px;
+  gap: 12px;
+}
+
+@keyframes fadeInUp {
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 </style>
 

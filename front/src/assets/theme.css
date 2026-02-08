@@ -1,0 +1,358 @@
+/* ========================================
+   创意艺术主题 - 渐变 + 玻璃态 + 微动画
+   ======================================== */
+
+:root {
+  /* 主色系 - 紫蓝渐变 */
+  --gradient-primary: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  --gradient-secondary: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+  --gradient-accent: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
+
+  /* 玻璃态效果 */
+  --glass-bg: rgba(255, 255, 255, 0.7);
+  --glass-border: rgba(255, 255, 255, 0.2);
+  --glass-shadow: 0 8px 32px 0 rgba(31, 38, 135, 0.15);
+
+  /* 深色玻璃态 */
+  --glass-dark-bg: rgba(30, 30, 46, 0.7);
+  --glass-dark-border: rgba(255, 255, 255, 0.1);
+
+  /* 动画时间 */
+  --transition-fast: 0.2s ease;
+  --transition-normal: 0.3s ease;
+  --transition-slow: 0.5s ease;
+}
+
+/* ========================================
+   全局背景和基础样式
+   ======================================== */
+
+html, body {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 50%, #f093fb 100%);
+  background-attachment: fixed;
+  min-height: 100vh;
+}
+
+/* ========================================
+   Element Plus 组件美化
+   ======================================== */
+
+/* 侧边栏美化 */
+.el-aside {
+  background: var(--glass-dark-bg) !important;
+  backdrop-filter: blur(10px);
+  border-right: 1px solid var(--glass-dark-border) !important;
+  box-shadow: 4px 0 20px rgba(0, 0, 0, 0.1);
+}
+
+/* Logo 美化 */
+.logo {
+  background: var(--gradient-primary);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+  font-weight: 700;
+  font-size: 20px;
+  letter-spacing: 1px;
+  transition: var(--transition-normal);
+}
+
+.logo:hover {
+  transform: scale(1.05);
+  filter: drop-shadow(0 0 8px rgba(102, 126, 234, 0.4));
+}
+
+/* 菜单项美化 */
+.el-menu {
+  background: transparent !important;
+  border-right: none !important;
+}
+
+.el-menu-item {
+  color: rgba(255, 255, 255, 0.7) !important;
+  transition: var(--transition-normal);
+  position: relative;
+  margin: 8px 12px;
+  border-radius: 8px;
+}
+
+.el-menu-item:hover {
+  background: rgba(255, 255, 255, 0.1) !important;
+  color: #fff !important;
+  transform: translateX(4px);
+}
+
+.el-menu-item.is-active {
+  background: var(--gradient-primary) !important;
+  color: #fff !important;
+  box-shadow: 0 4px 15px rgba(102, 126, 234, 0.3);
+}
+
+/* 主内容区美化 */
+.el-main {
+  background: transparent !important;
+  padding: 24px;
+}
+
+/* ========================================
+   卡片和容器美化
+   ======================================== */
+
+.el-card {
+  background: var(--glass-bg) !important;
+  backdrop-filter: blur(10px);
+  border: 1px solid var(--glass-border) !important;
+  box-shadow: var(--glass-shadow);
+  border-radius: 16px !important;
+  transition: var(--transition-normal);
+}
+
+.el-card:hover {
+  transform: translateY(-4px);
+  box-shadow: 0 12px 40px rgba(102, 126, 234, 0.2);
+  border-color: rgba(255, 255, 255, 0.3) !important;
+}
+
+/* ========================================
+   表格美化
+   ======================================== */
+
+.el-table {
+  background: var(--glass-bg) !important;
+  backdrop-filter: blur(10px);
+  border-radius: 12px !important;
+  overflow: hidden;
+  box-shadow: var(--glass-shadow);
+}
+
+.el-table__header {
+  background: linear-gradient(90deg, rgba(102, 126, 234, 0.1), rgba(240, 147, 251, 0.1)) !important;
+}
+
+.el-table__header th {
+  background: transparent !important;
+  color: rgba(255, 255, 255, 0.9) !important;
+  font-weight: 600;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1) !important;
+}
+
+.el-table__body tr {
+  transition: var(--transition-fast);
+}
+
+.el-table__body tr:hover > td {
+  background: rgba(102, 126, 234, 0.05) !important;
+}
+
+.el-table__body td {
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05) !important;
+  color: rgba(0, 0, 0, 0.85);
+}
+
+/* ========================================
+   按钮美化
+   ======================================== */
+
+.el-button {
+  border-radius: 8px;
+  font-weight: 500;
+  transition: var(--transition-normal);
+  border: none;
+}
+
+.el-button--primary {
+  background: var(--gradient-primary) !important;
+  box-shadow: 0 4px 15px rgba(102, 126, 234, 0.3);
+}
+
+.el-button--primary:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 20px rgba(102, 126, 234, 0.4);
+}
+
+.el-button--primary:active {
+  transform: translateY(0);
+}
+
+.el-button--danger {
+  background: linear-gradient(135deg, #f5576c 0%, #f093fb 100%) !important;
+}
+
+.el-button--danger:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 20px rgba(245, 87, 108, 0.3);
+}
+
+/* ========================================
+   输入框美化
+   ======================================== */
+
+.el-input__wrapper {
+  background: var(--glass-bg) !important;
+  backdrop-filter: blur(10px);
+  border: 1px solid var(--glass-border) !important;
+  border-radius: 8px;
+  transition: var(--transition-normal);
+}
+
+.el-input__wrapper:hover {
+  border-color: rgba(102, 126, 234, 0.3) !important;
+  box-shadow: 0 0 0 2px rgba(102, 126, 234, 0.1);
+}
+
+.el-input__wrapper.is-focus {
+  border-color: #667eea !important;
+  box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.2) !important;
+}
+
+/* ========================================
+   对话框美化
+   ======================================== */
+
+.el-dialog {
+  border-radius: 16px !important;
+}
+
+.el-dialog__header {
+  background: var(--gradient-primary);
+  border-bottom: none;
+}
+
+.el-dialog__title {
+  color: #fff;
+  font-weight: 600;
+}
+
+.el-dialog__body {
+  background: var(--glass-bg);
+  backdrop-filter: blur(10px);
+}
+
+/* ========================================
+   抽屉美化
+   ======================================== */
+
+.el-drawer {
+  border-radius: 16px 0 0 16px !important;
+}
+
+.el-drawer__header {
+  background: var(--gradient-primary);
+  border-bottom: none;
+}
+
+.el-drawer__title {
+  color: #fff;
+  font-weight: 600;
+}
+
+.el-drawer__body {
+  background: var(--glass-bg);
+  backdrop-filter: blur(10px);
+}
+
+/* ========================================
+   标签美化
+   ======================================== */
+
+.el-tag {
+  border-radius: 6px;
+  border: none;
+  transition: var(--transition-fast);
+}
+
+.el-tag--success {
+  background: linear-gradient(135deg, #84fab0 0%, #8fd3f4 100%);
+  color: #fff;
+}
+
+.el-tag--info {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: #fff;
+}
+
+.el-tag--warning {
+  background: linear-gradient(135deg, #fa709a 0%, #fee140 100%);
+  color: #fff;
+}
+
+.el-tag--danger {
+  background: linear-gradient(135deg, #f5576c 0%, #f093fb 100%);
+  color: #fff;
+}
+
+.el-tag:hover {
+  transform: scale(1.05);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+}
+
+/* ========================================
+   自定义动画
+   ======================================== */
+
+@keyframes fadeInUp {
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes slideInLeft {
+  from {
+    opacity: 0;
+    transform: translateX(-20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@keyframes glow {
+  0%, 100% {
+    box-shadow: 0 0 5px rgba(102, 126, 234, 0.3);
+  }
+  50% {
+    box-shadow: 0 0 20px rgba(102, 126, 234, 0.6);
+  }
+}
+
+@keyframes float {
+  0%, 100% {
+    transform: translateY(0px);
+  }
+  50% {
+    transform: translateY(-8px);
+  }
+}
+
+/* 应用动画 */
+.el-card {
+  animation: fadeInUp 0.6s ease-out;
+}
+
+.el-menu-item {
+  animation: slideInLeft 0.4s ease-out;
+}
+
+/* ========================================
+   响应式调整
+   ======================================== */
+
+@media (max-width: 768px) {
+  .el-aside {
+    width: 180px !important;
+  }
+
+  .logo {
+    font-size: 16px;
+  }
+
+  .el-table {
+    font-size: 12px;
+  }
+}

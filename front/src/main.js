@@ -13,6 +13,7 @@ import '@kangc/v-md-editor/lib/theme/style/vuepress.css';
 import Prism from 'prismjs';
 import * as ElementPlusIconsVue from '@element-plus/icons-vue'
 import "./assets/main.css"
+import "./assets/theme.css"
 import '@fortawesome/fontawesome-free/css/all.min.css';
 VueMarkdownEditor.use(vuepressTheme, {
     Prism,

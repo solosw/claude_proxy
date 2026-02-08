@@ -15,6 +15,30 @@ import (
 // OpenAIAdapter 使用 go-openai 请求上游，将 Anthropic 请求/响应与 OpenAI 互转。
 type OpenAIAdapter struct{}
 
+// openaiErrorBody 从 go-openai 错误中取出 statusCode 和可返回的 body，供上层按 Claude 格式返回。
+// 支持 APIError（OpenAI 标准）和 RequestError（含 Body，如 ModelScope 429 等）。
+func openaiErrorBody(err error) (statusCode int, contentType string, body []byte) {
+	var reqErr *openai.RequestError
+	if errors.As(err, &reqErr) {
+		statusCode = reqErr.HTTPStatusCode
+		contentType = "application/json"
+		body = reqErr.Body
+		logStep("openai adapter: request error status=%d bodyLen=%d", statusCode, len(body))
+		return statusCode, contentType, body
+	}
+	var apiErr *openai.APIError
+	if !errors.As(err, &apiErr) {
+		return 0, "", nil
+	}
+	statusCode = apiErr.HTTPStatusCode
+	contentType = "application/json"
+	msg := err.Error()
+	out := map[string]any{"error": map[string]any{"message": msg}}
+	body, _ = json.Marshal(out)
+	logStep("openai adapter: api error status=%d bodyLen=%d", statusCode, len(body))
+	return statusCode, contentType, body
+}
+
 // Execute 使用 go-openai SDK 请求上游，再转回 Anthropic 格式。
 func (a *OpenAIAdapter) Execute(ctx context.Context, payload map[string]any, opts ExecuteOptions) (statusCode int, contentType string, body []byte, streamBody io.ReadCloser, err error) {
 	logStep("openai adapter: start, stream=%v, baseURL=%s, model=%s", opts.Stream, opts.BaseURL, opts.UpstreamModel)
@@ -75,7 +99,8 @@ func (a *OpenAIAdapter) Execute(ctx context.Context, payload map[string]any, opt
 		stream, errStream := client.CreateChatCompletionStream(ctx, oaiReq)
 		logStep("openai adapter: CreateChatCompletionStream done, err=%v", errStream)
 		if errStream != nil {
-			return 0, "", nil, nil, errStream
+			code, ct, errBody := openaiErrorBody(errStream)
+			return code, ct, errBody, nil, errStream
 		}
 		// 转成 Anthropic SSE 格式的 ReadCloser；客户端断开时 ctx 取消，goroutine 会提前退出并关闭 stream。
 		pr, pw := io.Pipe()
@@ -90,13 +115,8 @@ func (a *OpenAIAdapter) Execute(ctx context.Context, payload map[string]any, opt
 	resp, err := client.CreateChatCompletion(ctx, oaiReq)
 	logStep("openai adapter: CreateChatCompletion done, err=%v", err)
 	if err != nil {
-		var apiErr *openai.APIError
-		if errors.As(err, &apiErr) {
-			statusCode := apiErr.HTTPStatusCode
-			logStep("openai adapter: api error status=%d", statusCode)
-			return statusCode, "application/json", nil, nil, err
-		}
-		return 0, "", nil, nil, err
+		code, ct, errBody := openaiErrorBody(err)
+		return code, ct, errBody, nil, err
 	}
 
 	// 将 go-openai 响应转为 Anthropic 格式
@@ -194,7 +214,8 @@ func openAIToolsToSDK(tools []openAITool) []openai.Tool {
 	return out
 }
 
-// convertOpenAIStreamToAnthropicWriter 从 go-openai stream 读 chunk 并写入 Anthropic SSE 格式；ctx 取消时立即退出。
+// convertOpenAIStreamToAnthropicWriter 从 go-openai stream 读 chunk 并写入 Claude Code（Anthropic）流式 SSE 格式；ctx 取消时立即退出。
+// 参考 Anthropic / New API 等流式约定：首 chunk 即发 message_start/content_block_start，避免仅 role 的首包导致客户端收不到起始事件。
 func convertOpenAIStreamToAnthropicWriter(ctx context.Context, stream *openai.ChatCompletionStream, w io.Writer) {
 	first := true
 	for {
@@ -204,6 +225,13 @@ func convertOpenAIStreamToAnthropicWriter(ctx context.Context, stream *openai.Ch
 		chunk, err := stream.Recv()
 		if err != nil {
 			if errors.Is(err, io.EOF) {
+				if first {
+					// 未收到任何有效 chunk 就 EOF：仍补全起始事件，再结束
+					writeSSE(w, "message_start", `{"type":"message_start","message":{"id":"","type":"message","role":"assistant","content":[],"model":""}}`)
+					writeSSE(w, "content_block_start", `{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`)
+					writeSSE(w, "content_block_stop", `{"type":"content_block_stop","index":0}`)
+					writeSSE(w, "message_delta", `{"type":"message_delta","delta":{"stop_reason":"end_turn"}}`)
+				}
 				writeSSE(w, "message_stop", `{"type":"message_stop"}`)
 			}
 			return
@@ -214,7 +242,8 @@ func convertOpenAIStreamToAnthropicWriter(ctx context.Context, stream *openai.Ch
 			delta = chunk.Choices[0].Delta.Content
 			finish = string(chunk.Choices[0].FinishReason)
 		}
-		if first && delta != "" {
+		// 首个 chunk 即发送 message_start / content_block_start（OpenAI 兼容流常先发仅 role 的 chunk，无 content）
+		if first {
 			first = false
 			writeSSE(w, "message_start", `{"type":"message_start","message":{"id":"","type":"message","role":"assistant","content":[],"model":""}}`)
 			writeSSE(w, "content_block_start", `{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`)
@@ -224,8 +253,10 @@ func convertOpenAIStreamToAnthropicWriter(ctx context.Context, stream *openai.Ch
 			writeSSE(w, "content_block_delta", `{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":`+string(escaped)+`}}`)
 		}
 		if finish != "" {
+			stopReason := mapFinishReason(finish)
+			stopJSON, _ := json.Marshal(stopReason)
 			writeSSE(w, "content_block_stop", `{"type":"content_block_stop","index":0}`)
-			writeSSE(w, "message_delta", `{"type":"message_delta","delta":{"stop_reason":"end_turn"}}`)
+			writeSSE(w, "message_delta", `{"type":"message_delta","delta":{"stop_reason":`+string(stopJSON)+`}}`)
 			writeSSE(w, "message_stop", `{"type":"message_stop"}`)
 			return
 		}

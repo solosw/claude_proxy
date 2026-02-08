@@ -43,6 +43,17 @@ func (a *AnthropicAdapter) Execute(ctx context.Context, payload map[string]any, 
 		var rawResp *http.Response
 		err = client.Post(ctx, "/v1/messages", reqBody, nil, option.WithResponseInto(&rawResp))
 		logStep("anthropic adapter: stream POST done, err=%v rawResp=%v", err, rawResp != nil)
+		if err != nil && rawResp != nil {
+			// 有错误且拿到了响应（如 422）：读出 status/body 供上层按 Claude 格式返回
+			statusCode = rawResp.StatusCode
+			contentType = rawResp.Header.Get("Content-Type")
+			if rawResp.Body != nil {
+				body, _ = io.ReadAll(rawResp.Body)
+				rawResp.Body.Close()
+			}
+			logStep("anthropic adapter: stream error response status=%d bodyLen=%d", statusCode, len(body))
+			return statusCode, contentType, body, nil, err
+		}
 		if err != nil {
 			if apiErr, ok := err.(*anthropic.Error); ok && apiErr.Request != nil && apiErr.Request.Response != nil {
 				r := apiErr.Request.Response
@@ -75,7 +86,17 @@ func (a *AnthropicAdapter) Execute(ctx context.Context, payload map[string]any, 
 	// 非流式：用 WithResponseInto 拿原始响应再读 body
 	var httpResp *http.Response
 	err = client.Post(ctx, "/v1/messages", reqBody, nil, option.WithResponseInto(&httpResp))
-	logStep("anthropic adapter: non-stream POST done, err=%v", err)
+	logStep("anthropic adapter: non-stream POST done, err=%v httpResp=%v", err, httpResp != nil)
+	if err != nil && httpResp != nil {
+		statusCode = httpResp.StatusCode
+		contentType = httpResp.Header.Get("Content-Type")
+		if httpResp.Body != nil {
+			body, _ = io.ReadAll(httpResp.Body)
+			httpResp.Body.Close()
+		}
+		logStep("anthropic adapter: non-stream error response status=%d bodyLen=%d", statusCode, len(body))
+		return statusCode, contentType, body, nil, err
+	}
 	if err != nil {
 		if apiErr, ok := err.(*anthropic.Error); ok {
 			logStep("anthropic adapter: api error status=%d", apiErr.StatusCode)

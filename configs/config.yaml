@@ -17,21 +17,29 @@ operators:
   # Minimax：仅替换认证 API Key，使用模型自身的 Base URL 请求，不做复杂协议转换
   minimax:
     name: "Minimax"
-    description: "仅替换认证 API Key，使用模型自身 URL 请求"
+    description: "Minimax"
     enabled: true
     base_url: ""
     api_key: ""
     interface_type: "anthropic"
   glm:
     name: "Glm"
-    description: "仅替换认证 API Key，使用模型自身 URL 请求"
+    description: "Glm"
     enabled: true
     base_url: ""
     api_key: ""
     interface_type: "anthropic"
   kimi:
     name: "Kimi"
-    description: "仅替换认证 API Key，使用模型自身 URL 请求"
+    description: "Kimi"
+    enabled: true
+    base_url: ""
+    api_key: ""
+    interface_type: "anthropic"
+
+  proxy:
+    name: "proxy"
+    description: "anthropic反向代理"
     enabled: true
     base_url: ""
     api_key: ""

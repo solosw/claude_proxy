@@ -23,9 +23,9 @@ onMounted(loadOperators);
 
 <template>
   <div class="p-6">
-    <div class="mb-4">
-      <h2 class="text-xl font-semibold">运营商</h2>
-      <p class="text-gray-500 text-sm mt-1">
+    <div class="header-section">
+      <h2 class="page-title">运营商</h2>
+      <p class="page-description">
         运营商为系统内置，不可添加或修改。选择运营商的模型会使用系统配置的转发逻辑，与直连 OpenAI / Anthropic 区分开。
       </p>
     </div>
@@ -49,3 +49,47 @@ onMounted(loadOperators);
     </el-table>
   </div>
 </template>
+
+<style scoped>
+.p-6 {
+  animation: fadeInUp 0.6s ease-out;
+}
+
+.header-section {
+  margin-bottom: 24px;
+  padding: 20px;
+  background: rgba(255, 255, 255, 0.6);
+  backdrop-filter: blur(10px);
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  box-shadow: 0 4px 15px rgba(102, 126, 234, 0.1);
+}
+
+.page-title {
+  font-size: 24px;
+  font-weight: 700;
+  margin: 0 0 12px;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+.page-description {
+  margin: 0;
+  font-size: 14px;
+  color: #6b7280;
+  line-height: 1.6;
+}
+
+@keyframes fadeInUp {
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+</style>
