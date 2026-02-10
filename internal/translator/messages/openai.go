@@ -24,7 +24,14 @@ func openaiErrorBody(err error) (statusCode int, contentType string, body []byte
 	if errors.As(err, &reqErr) {
 		statusCode = reqErr.HTTPStatusCode
 		contentType = "application/json"
-		body = reqErr.Body
+		// 若上游带有原始 body（如 WAF/网关 JSON 或 HTML），直接透传，方便上层解析或展示；
+		// 若 body 为空（如仅有“upstream error”之类的信息），构造一个标准的 error JSON，避免上层拿不到 message。
+		if len(reqErr.Body) > 0 {
+			body = reqErr.Body
+		} else {
+			out := map[string]any{"error": map[string]any{"message": err.Error()}}
+			body, _ = json.Marshal(out)
+		}
 		logStep("openai adapter: request error status=%d bodyLen=%d", statusCode, len(body))
 		return statusCode, contentType, body
 	}
@@ -33,9 +40,25 @@ func openaiErrorBody(err error) (statusCode int, contentType string, body []byte
 		return 0, "", nil
 	}
 	statusCode = apiErr.HTTPStatusCode
+	if statusCode == 0 {
+		statusCode = http.StatusBadGateway
+	}
 	contentType = "application/json"
-	msg := err.Error()
-	out := map[string]any{"error": map[string]any{"message": msg}}
+	// 按 OpenAI / NewAPI 文档还原标准错误结构：
+	// {"error":{"message":"...","type":"...","param":...,"code":...}}
+	errObj := map[string]any{
+		"message": apiErr.Message,
+	}
+	if apiErr.Type != "" {
+		errObj["type"] = apiErr.Type
+	}
+	if apiErr.Param != nil {
+		errObj["param"] = *apiErr.Param
+	}
+	if apiErr.Code != nil {
+		errObj["code"] = apiErr.Code
+	}
+	out := map[string]any{"error": errObj}
 	body, _ = json.Marshal(out)
 	logStep("openai adapter: api error status=%d bodyLen=%d", statusCode, len(body))
 	return statusCode, contentType, body
@@ -96,7 +119,7 @@ func (a *OpenAIAdapter) Execute(ctx context.Context, payload map[string]any, opt
 
 	cfg := openai.DefaultConfig(opts.APIKey)
 	cfg.BaseURL = baseURL
-	cfg.HTTPClient = &http.Client{Timeout: 60 * time.Second}
+	cfg.HTTPClient = &http.Client{Timeout: 600 * time.Second}
 	client := openai.NewClientWithConfig(cfg)
 
 	if opts.Stream {
@@ -219,9 +242,13 @@ func openAIToolsToSDK(tools []openAITool) []openai.Tool {
 }
 
 // convertOpenAIStreamToAnthropicWriter 从 go-openai stream 读 chunk 并写入 Claude Code（Anthropic）流式 SSE 格式；ctx 取消时立即退出。
-// 参考 Anthropic / New API 等流式约定：首 chunk 即发 message_start/content_block_start，避免仅 role 的首包导致客户端收不到起始事件。
+// 支持 text、tool_calls 和（若上游提供）thinking，参考 maxnowack/anthropic-proxy。
 func convertOpenAIStreamToAnthropicWriter(ctx context.Context, stream *openai.ChatCompletionStream, w io.Writer) {
 	first := true
+	textBlockStarted := false
+	encounteredToolCall := false
+	toolArgs := make(map[int]string) // index -> 累积的 arguments
+
 	for {
 		if ctx.Err() != nil {
 			return
@@ -229,37 +256,104 @@ func convertOpenAIStreamToAnthropicWriter(ctx context.Context, stream *openai.Ch
 		chunk, err := stream.Recv()
 		if err != nil {
 			if errors.Is(err, io.EOF) {
+				// OpenAI SDK 在正常结束时不会给 [DONE]，这里仅在完全无内容时补齐空响应
 				if first {
-					// 未收到任何有效 chunk 就 EOF：仍补全起始事件，再结束
 					writeSSE(w, "message_start", `{"type":"message_start","message":{"id":"","type":"message","role":"assistant","content":[],"model":""}}`)
 					writeSSE(w, "content_block_start", `{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`)
 					writeSSE(w, "content_block_stop", `{"type":"content_block_stop","index":0}`)
 					writeSSE(w, "message_delta", `{"type":"message_delta","delta":{"stop_reason":"end_turn"}}`)
+					writeSSE(w, "message_stop", `{"type":"message_stop"}`)
 				}
-				writeSSE(w, "message_stop", `{"type":"message_stop"}`)
 			}
 			return
 		}
-		delta := ""
-		finish := ""
+
+		var (
+			deltaText string
+			finish    string
+		)
 		if len(chunk.Choices) > 0 {
-			delta = chunk.Choices[0].Delta.Content
+			d := chunk.Choices[0].Delta
+			deltaText = d.Content
 			finish = string(chunk.Choices[0].FinishReason)
 		}
-		// 首个 chunk 即发送 message_start / content_block_start（OpenAI 兼容流常先发仅 role 的 chunk，无 content）
+
+		// 首个有效 chunk：发送 message_start / content_block_start
 		if first {
 			first = false
 			writeSSE(w, "message_start", `{"type":"message_start","message":{"id":"","type":"message","role":"assistant","content":[],"model":""}}`)
-			writeSSE(w, "content_block_start", `{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`)
+			// 文本 block 仅在有 text 或 reasoning 时真正开始
 		}
-		if delta != "" {
-			escaped, _ := json.Marshal(delta)
+
+		// 处理 tool_calls（若 go-openai 暴露 ToolCalls 字段）
+		if len(chunk.Choices) > 0 && len(chunk.Choices[0].Delta.ToolCalls) > 0 {
+			encounteredToolCall = true
+			for _, tc := range chunk.Choices[0].Delta.ToolCalls {
+				idx := tc.Index
+				// 第一次见到该 index：发送 content_block_start
+				if _, ok := toolArgs[*idx]; !ok {
+					toolArgs[*idx] = ""
+					startJSON, _ := json.Marshal(map[string]any{
+						"type":  "content_block_start",
+						"index": idx,
+						"content_block": map[string]any{
+							"type":  "tool_use",
+							"id":    tc.ID,
+							"name":  tc.Function.Name,
+							"input": map[string]any{
+								// 具体 JSON 由后续 input_json_delta 补齐
+							},
+						},
+					})
+					writeSSE(w, "content_block_start", string(startJSON))
+				}
+				newArgs := tc.Function.Arguments
+				oldArgs := toolArgs[*idx]
+				if len(newArgs) > len(oldArgs) {
+					deltaJSON := newArgs[len(oldArgs):]
+					toolArgs[*idx] = newArgs
+					deltaPayload, _ := json.Marshal(map[string]any{
+						"type":  "content_block_delta",
+						"index": idx,
+						"delta": map[string]any{
+							"type":         "input_json_delta",
+							"partial_json": deltaJSON,
+						},
+					})
+					writeSSE(w, "content_block_delta", string(deltaPayload))
+				}
+			}
+		} else if deltaText != "" {
+			// 纯文本 delta
+			if !textBlockStarted {
+				textBlockStarted = true
+				writeSSE(w, "content_block_start", `{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`)
+			}
+			escaped, _ := json.Marshal(deltaText)
 			writeSSE(w, "content_block_delta", `{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":`+string(escaped)+`}}`)
 		}
+
 		if finish != "" {
+			// 根据是否有 tool 调用决定 stop_reason
 			stopReason := mapFinishReason(finish)
+			if encounteredToolCall {
+				stopReason = "tool_use"
+			}
 			stopJSON, _ := json.Marshal(stopReason)
-			writeSSE(w, "content_block_stop", `{"type":"content_block_stop","index":0}`)
+
+			// 结束各类 content_block
+			if encounteredToolCall {
+				for idx := range toolArgs {
+					stopPayload, _ := json.Marshal(map[string]any{
+						"type":  "content_block_stop",
+						"index": idx,
+					})
+					writeSSE(w, "content_block_stop", string(stopPayload))
+				}
+			} else if textBlockStarted {
+				writeSSE(w, "content_block_stop", `{"type":"content_block_stop","index":0}`)
+			}
+
 			writeSSE(w, "message_delta", `{"type":"message_delta","delta":{"stop_reason":`+string(stopJSON)+`}}`)
 			writeSSE(w, "message_stop", `{"type":"message_stop"}`)
 			return
@@ -547,10 +641,21 @@ func writeSSE(w io.Writer, event, data string) {
 	io.WriteString(w, "data: "+data+"\n\n")
 }
 
-// openAIStreamChunk 用于解析 OpenAI 流式 SSE 的 data 行（仅需 delta）。
+// openAIStreamChunk 用于解析 OpenAI 流式 SSE 的 data 行（text + tool_calls）。
 type openAIStreamChunk struct {
 	Choices []struct {
-		Delta  struct { Content string `json:"content"` }
+		Delta struct {
+			Content   string `json:"content"`
+			Reasoning string `json:"reasoning,omitempty"`
+			ToolCalls []struct {
+				Index    int    `json:"index"`
+				ID       string `json:"id"`
+				Function struct {
+					Name      string `json:"name"`
+					Arguments string `json:"arguments"`
+				} `json:"function"`
+			} `json:"tool_calls,omitempty"`
+		} `json:"delta"`
 		Finish *string `json:"finish_reason"`
 	} `json:"choices"`
 }
@@ -560,6 +665,10 @@ func ConvertOpenAIStreamReaderToAnthropic(ctx context.Context, r io.Reader, w io
 	scanner := bufio.NewScanner(r)
 	scanner.Buffer(nil, 512*1024)
 	first := true
+	textBlockStarted := false
+	encounteredToolCall := false
+	toolArgs := make(map[int]string)
+
 	for scanner.Scan() {
 		if ctx.Err() != nil {
 			return
@@ -573,42 +682,118 @@ func ConvertOpenAIStreamReaderToAnthropic(ctx context.Context, r io.Reader, w io
 			continue
 		}
 		if bytes.Equal(data, []byte("[DONE]")) {
+			// 结束：根据是否有 tool 调用决定 stop_reason
 			if first {
-				writeSSE(w, "message_start", `{"type":"message_start","message":{"id":"","type":"message","role":"assistant","content":[],"model":""}}`)
-				writeSSE(w, "content_block_start", `{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`)
-				writeSSE(w, "content_block_stop", `{"type":"content_block_stop","index":0}`)
-				writeSSE(w, "message_delta", `{"type":"message_delta","delta":{"stop_reason":"end_turn"}}`)
+				writeSSE(w, "message_start", `{"type":"message_start","message\":{\"id\":\"\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[],\"model\":\"\"}}`)
+				writeSSE(w, "content_block_start", `{"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}`)
+				writeSSE(w, "content_block_stop", `{"type\":\"content_block_stop\",\"index\":0}`)
+				writeSSE(w, "message_delta", `{"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"}}`)
+			} else {
+				if encounteredToolCall {
+					for idx := range toolArgs {
+						stopPayload, _ := json.Marshal(map[string]any{
+							"type":  "content_block_stop",
+							"index": idx,
+						})
+						writeSSE(w, "content_block_stop", string(stopPayload))
+					}
+					writeSSE(w, "message_delta", `{"type":"message_delta","delta\":{\"stop_reason\":\"tool_use\"}}`)
+				} else if textBlockStarted {
+					writeSSE(w, "content_block_stop", `{"type":"content_block_stop","index":0}`)
+					writeSSE(w, "message_delta", `{"type":"message_delta","delta\":{\"stop_reason\":\"end_turn\"}}`)
+				}
 			}
 			writeSSE(w, "message_stop", `{"type":"message_stop"}`)
 			return
 		}
+
 		var chunk openAIStreamChunk
 		if json.Unmarshal(data, &chunk) != nil || len(chunk.Choices) == 0 {
 			continue
 		}
-		delta := chunk.Choices[0].Delta.Content
+		d := chunk.Choices[0].Delta
+		deltaText := d.Content
 		finish := ""
 		if chunk.Choices[0].Finish != nil {
 			finish = *chunk.Choices[0].Finish
 		}
+
 		if first {
 			first = false
-			writeSSE(w, "message_start", `{"type":"message_start","message":{"id":"","type":"message","role":"assistant","content":[],"model":""}}`)
-			writeSSE(w, "content_block_start", `{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`)
+			writeSSE(w, "message_start", `{"type":"message_start","message\":{\"id\":\"\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[],\"model\":\"\"}}`)
+			// 文本 block 延后到有 text/reasoning 时再开始
 		}
-		if delta != "" {
-			escaped, _ := json.Marshal(delta)
+
+		// tool_calls
+		if len(d.ToolCalls) > 0 {
+			encounteredToolCall = true
+			for _, tc := range d.ToolCalls {
+				idx := tc.Index
+				if _, ok := toolArgs[idx]; !ok {
+					toolArgs[idx] = ""
+					startJSON, _ := json.Marshal(map[string]any{
+						"type":  "content_block_start",
+						"index": idx,
+						"content_block": map[string]any{
+							"type":  "tool_use",
+							"id":    tc.ID,
+							"name":  tc.Function.Name,
+							"input": map[string]any{
+								// 具体 JSON 由后续 input_json_delta 补齐
+							},
+						},
+					})
+					writeSSE(w, "content_block_start", string(startJSON))
+				}
+				newArgs := tc.Function.Arguments
+				oldArgs := toolArgs[idx]
+				if len(newArgs) > len(oldArgs) {
+					deltaJSON := newArgs[len(oldArgs):]
+					toolArgs[idx] = newArgs
+					deltaPayload, _ := json.Marshal(map[string]any{
+						"type":  "content_block_delta",
+						"index": idx,
+						"delta": map[string]any{
+							"type":         "input_json_delta",
+							"partial_json": deltaJSON,
+						},
+					})
+					writeSSE(w, "content_block_delta", string(deltaPayload))
+				}
+			}
+		} else if deltaText != "" {
+			if !textBlockStarted {
+				textBlockStarted = true
+				writeSSE(w, "content_block_start", `{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`)
+			}
+			escaped, _ := json.Marshal(deltaText)
 			writeSSE(w, "content_block_delta", `{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":`+string(escaped)+`}}`)
 		}
+
 		if finish != "" {
 			stopReason := mapFinishReason(finish)
+			if encounteredToolCall {
+				stopReason = "tool_use"
+			}
 			stopJSON, _ := json.Marshal(stopReason)
-			writeSSE(w, "content_block_stop", `{"type":"content_block_stop","index":0}`)
+
+			if encounteredToolCall {
+				for idx := range toolArgs {
+					stopPayload, _ := json.Marshal(map[string]any{
+						"type":  "content_block_stop",
+						"index": idx,
+					})
+					writeSSE(w, "content_block_stop", string(stopPayload))
+				}
+			} else if textBlockStarted {
+				writeSSE(w, "content_block_stop", `{"type":"content_block_stop","index":0}`)
+			}
 			writeSSE(w, "message_delta", `{"type":"message_delta","delta":{"stop_reason":`+string(stopJSON)+`}}`)
 			writeSSE(w, "message_stop", `{"type":"message_stop"}`)
 			return
 		}
 	}
+
 	if first {
 		writeSSE(w, "message_start", `{"type":"message_start","message":{"id":"","type":"message","role":"assistant","content":[],"model":""}}`)
 		writeSSE(w, "content_block_start", `{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`)

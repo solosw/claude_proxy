@@ -9,7 +9,7 @@ import (
 )
 
 // SSE 写超时：若客户端在此时间内未读取（如 Claude Code 执行耗时命令导致无响应），服务端会主动关闭连接。
-const sseWriteTimeout = 10 * time.Minute
+const sseWriteTimeout = 30 * time.Minute
 
 // ProxySSE 将上游返回的 SSE 流透传给客户端。
 // 当客户端长时间不读取时（如执行耗时命令），通过写超时主动关闭 SSE，避免连接一直挂起。

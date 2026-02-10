@@ -2,7 +2,7 @@ package main
 
 import (
 	"log"
-	"net/http"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 
@@ -25,11 +25,46 @@ func main() {
 
 	// 5. 创建 Gin 路由器
 	router := gin.Default()
+	webGroup := router.Group("/")
+	webGroup.Use(func(c *gin.Context) {
+		// 只对web静态资源禁用缓存
+		if strings.HasPrefix(c.Request.URL.Path, "/assets") ||
+			strings.HasPrefix(c.Request.URL.Path, "/css") ||
+			strings.HasPrefix(c.Request.URL.Path, "/js") {
+			c.Header("Cache-Control", "no-cache, no-store, must-revalidate")
+			c.Header("Pragma", "no-cache")
+			c.Header("Expires", "0")
+		}
+		c.Next()
+	})
+	webGroup.Static("/assets", "./public/web/assets")
+	webGroup.Static("/css", "./public/web/css")
+	webGroup.Static("/js", "./public/web/js")
 
-	// 404 时打印未匹配的 Method + Path，便于排查（协议转换不会返回 404，404 表示路由未命中）
+	// Vue History 路由支持 - 所有未匹配的路由都返回 index.html
 	router.NoRoute(func(c *gin.Context) {
-		log.Printf("[ClaudeRouter] 404 no route: %s %s", c.Request.Method, c.Request.URL.Path)
-		c.JSON(http.StatusNotFound, gin.H{"error": "not found", "path": c.Request.URL.Path, "method": c.Request.Method})
+		path := c.Request.URL.Path
+
+		// 如果是 API 请求（/back 开头），返回 404
+		if strings.HasPrefix(path, "/back") {
+			c.JSON(404, gin.H{"error": "API not found"})
+			return
+		}
+
+		// 检查是否是静态文件（包含文件扩展名）
+		if strings.Contains(path, ".") {
+			// 设置禁用缓存的响应头
+			c.Header("Cache-Control", "no-cache, no-store, must-revalidate")
+			c.Header("Pragma", "no-cache")
+			c.Header("Expires", "0")
+
+			// 尝试访问 web 目录下的文件
+			c.File("./public/web" + path)
+			return
+		}
+
+		// 其他路由返回 Vue 应用
+		c.File("./public/web/index.html")
 	})
 
 	// 初始化数据库

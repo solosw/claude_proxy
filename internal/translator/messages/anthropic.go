@@ -32,7 +32,7 @@ func (a *AnthropicAdapter) Execute(ctx context.Context, payload map[string]any, 
 
 	clientOpts := []option.RequestOption{
 		option.WithBaseURL(baseURL),
-		option.WithRequestTimeout(60 * time.Second),
+		option.WithRequestTimeout(600 * time.Second),
 	}
 	if opts.APIKey != "" {
 		clientOpts = append(clientOpts, option.WithAPIKey(opts.APIKey))

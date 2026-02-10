@@ -73,7 +73,7 @@ func (h *ChatTestHandler) handleChatTest(c *gin.Context) {
 	apiKey := strings.TrimSpace(m.APIKey)
 	baseURL := strings.TrimRight(strings.TrimSpace(m.BaseURL), "/")
 
-	timeout := 60 * time.Second
+	timeout := 600 * time.Second
 
 	upstreamModel := strings.TrimSpace(m.UpstreamID)
 	if upstreamModel == "" {
@@ -100,7 +100,7 @@ func (h *ChatTestHandler) handleChatTest(c *gin.Context) {
 			Name:           "chat-test",
 			APIKey:         apiKey,
 			BaseURL:        baseURL,
-			TimeoutSeconds: 60,
+			TimeoutSeconds: 600,
 		})
 
 		log.Printf("model:%v", upstreamModel)

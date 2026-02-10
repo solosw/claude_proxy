@@ -32,7 +32,7 @@ func NewAnthropic(cfg AnthropicConfig) *Anthropic {
 	if base == "" {
 		base = "https://api.anthropic.com"
 	}
-	timeout := 60 * time.Second
+	timeout := 600 * time.Second
 	if cfg.TimeoutSeconds > 0 {
 		timeout = time.Duration(cfg.TimeoutSeconds) * time.Second
 	}
@@ -92,13 +92,13 @@ func (p *Anthropic) ChatStream(ctx context.Context, req *ChatRequest) (io.ReadCl
 }
 
 type anthropicMessagesRequest struct {
-	Model     string               `json:"model"`
-	MaxTokens int                  `json:"max_tokens"`
-	Messages  []anthropicMessage   `json:"messages"`
-	Stream    bool                 `json:"stream,omitempty"`
-	Extra     map[string]any       `json:"-"`
-	Metadata  map[string]string    `json:"metadata,omitempty"`
-	StopSeq   []string             `json:"stop_sequences,omitempty"`
+	Model     string             `json:"model"`
+	MaxTokens int                `json:"max_tokens"`
+	Messages  []anthropicMessage `json:"messages"`
+	Stream    bool               `json:"stream,omitempty"`
+	Extra     map[string]any     `json:"-"`
+	Metadata  map[string]string  `json:"metadata,omitempty"`
+	StopSeq   []string           `json:"stop_sequences,omitempty"`
 }
 
 type anthropicMessage struct {
@@ -265,4 +265,3 @@ func (p *Anthropic) decodeAnthropicError(status int, body []byte) error {
 	}
 	return fmt.Errorf("anthropic error (status=%d): %s", status, trim)
 }
-

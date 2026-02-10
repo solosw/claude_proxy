@@ -79,7 +79,7 @@ func (h *ChatHandler) handleChatCompletions(c *gin.Context) {
 		Name:           m.ID,
 		APIKey:         apiKey,
 		BaseURL:        baseURL,
-		TimeoutSeconds: 60,
+		TimeoutSeconds: 600,
 	})
 
 	chatReq := req.ToChatRequest()
@@ -108,4 +108,3 @@ func (h *ChatHandler) handleChatCompletions(c *gin.Context) {
 	out := resptrans.ToOpenAIChatCompletionResponse(resp)
 	c.JSON(http.StatusOK, out)
 }
-

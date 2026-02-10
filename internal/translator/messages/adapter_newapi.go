@@ -89,7 +89,7 @@ func (a *NewAPIAdapter) Execute(ctx context.Context, payload map[string]any, opt
 		httpReq.Header.Set("Accept", "text/event-stream")
 	}
 
-	client := &http.Client{Timeout: 60 * time.Second}
+	client := &http.Client{Timeout: 600 * time.Second}
 	resp, err := client.Do(httpReq)
 	if err != nil {
 		logStep("newapi adapter: do err=%v", err)

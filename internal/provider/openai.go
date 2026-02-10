@@ -30,7 +30,7 @@ func NewOpenAI(cfg OpenAIConfig) *OpenAI {
 	if base == "" {
 		base = "https://api.openai.com/v1"
 	}
-	timeout := 60 * time.Second
+	timeout := 6000 * time.Second
 	if cfg.TimeoutSeconds > 0 {
 		timeout = time.Duration(cfg.TimeoutSeconds) * time.Second
 	}
