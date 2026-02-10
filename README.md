@@ -1,7 +1,7 @@
 ## ClaudeRouter
 
 ClaudeRouter 是一个用 Go 编写的轻量级「模型中转站」，后端兼容 Anthropic `/v1/messages` 和 OpenAI Chat Completions 协议，前端提供可视化的模型 / 运营商 / 组合模型管理和测试界面，并支持将多个第三方大模型服务（如 Minimax、Kimi、NewAPI、iFlow 等）统一接入后，通过统一的 API Key 对外暴露。
-
+支持组合模型，通过"!关键词 something to do" 输入格式来触发不同的模型。
 ### 功能特性
 
 - **统一的后端网关**
@@ -135,3 +135,9 @@ go build -o claude-router ./cmd/server
 
 （如有需要，请在此处补充项目实际使用的许可证信息，例如 MIT / Apache-2.0 等。）
 
+### todo
+- 智能切换
+- 限流
+- 组合模型间的组合
+- 其他供应商
+- 缓存

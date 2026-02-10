@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
@@ -19,8 +20,36 @@ import (
 // 对话级模型只选一次：依据 payload.metadata.user_id 判断是否同一对话，首次解析并缓存模型，后续同 user_id 使用缓存模型。
 var (
 	conversationModelMu sync.RWMutex
-	conversationModel   = make(map[string]string) // metadata.user_id -> model_id
+	conversationModel   = make(map[string]conversationModelEntry) // metadata.user_id -> (model_id,last_seen)
 )
+
+type conversationModelEntry struct {
+	ModelID  string
+	LastSeen time.Time
+}
+
+const (
+	conversationModelTTL             = 10 * time.Minute
+	conversationModelCleanupInterval = 15 * time.Minute
+)
+
+func init() {
+	// 定期清理对话级模型缓存，避免 metadata.user_id 无限增长导致内存泄漏。
+	go func() {
+		ticker := time.NewTicker(conversationModelCleanupInterval)
+		defer ticker.Stop()
+		for range ticker.C {
+			cutoff := time.Now().Add(-conversationModelTTL)
+			conversationModelMu.Lock()
+			for k, v := range conversationModel {
+				if v.ModelID == "" || v.LastSeen.Before(cutoff) {
+					delete(conversationModel, k)
+				}
+			}
+			conversationModelMu.Unlock()
+		}
+	}()
+}
 
 // MessagesHandler 提供 Anthropic 兼容的 /v1/messages 入口，供 Claude Code 调用。
 type MessagesHandler struct {
@@ -124,13 +153,29 @@ func (h *MessagesHandler) handleMessages(c *gin.Context) {
 
 	conversationID := extractMetadataUserID(payload)
 	var cachedModelID string
+	//conversationID = "" //禁用缓存
 	if conversationID != "" {
+		now := time.Now()
 		conversationModelMu.RLock()
-		cachedModelID = conversationModel[conversationID]
+		ent := conversationModel[conversationID]
 		conversationModelMu.RUnlock()
-		if cachedModelID != "" {
-			requestedModel = cachedModelID
-			utils.Logger.Printf("[ClaudeRouter] messages: step=conversation_model cached user_id=%s model=%s", conversationID, requestedModel)
+		if ent.ModelID != "" {
+			// TTL 过期视为未缓存
+			if !ent.LastSeen.IsZero() && now.Sub(ent.LastSeen) <= conversationModelTTL {
+				cachedModelID = ent.ModelID
+				requestedModel = cachedModelID
+				utils.Logger.Printf("[ClaudeRouter] messages: step=conversation_model cached user_id=%s model=%s", conversationID, requestedModel)
+
+				// 更新 last_seen
+				conversationModelMu.Lock()
+				ent.LastSeen = now
+				conversationModel[conversationID] = ent
+				conversationModelMu.Unlock()
+			} else {
+				conversationModelMu.Lock()
+				delete(conversationModel, conversationID)
+				conversationModelMu.Unlock()
+			}
 		}
 	}
 
@@ -190,10 +235,14 @@ func (h *MessagesHandler) handleMessages(c *gin.Context) {
 		targetModel = m
 		utils.Logger.Printf("[ClaudeRouter] messages: step=resolve_model combo chosen=%s", chosenID)
 		if conversationID != "" {
+			now := time.Now()
 			conversationModelMu.Lock()
-			if _, ok := conversationModel[conversationID]; !ok {
-				conversationModel[conversationID] = targetModel.ID
+			if ent, ok := conversationModel[conversationID]; !ok || ent.ModelID == "" {
+				conversationModel[conversationID] = conversationModelEntry{ModelID: targetModel.ID, LastSeen: now}
 				utils.Logger.Printf("[ClaudeRouter] messages: step=conversation_model set user_id=%s model=%s", conversationID, targetModel.ID)
+			} else {
+				ent.LastSeen = now
+				conversationModel[conversationID] = ent
 			}
 			conversationModelMu.Unlock()
 		}
@@ -379,27 +428,26 @@ func extractMetadataUserID(payload map[string]any) string {
 }
 
 func extractAnthropicInputText(payload map[string]any) string {
-	var sb strings.Builder
-	if sys, ok := payload["system"].(string); ok && strings.TrimSpace(sys) != "" {
-		sb.WriteString(sys)
-		sb.WriteString("\n")
-	}
 	msgs, ok := payload["messages"].([]any)
 	if !ok {
-		return sb.String()
+		return ""
 	}
-	for _, m := range msgs {
-		mm, ok := m.(map[string]any)
+
+	// 仅取 messages 中 role=user 的最新一条，作为关键词路由的输入文本（避免 assistant/system 内容干扰）。
+	for i := len(msgs) - 1; i >= 0; i-- {
+		mm, ok := msgs[i].(map[string]any)
 		if !ok {
+			continue
+		}
+		role, _ := mm["role"].(string)
+		if strings.TrimSpace(role) != "user" {
 			continue
 		}
 		switch content := mm["content"].(type) {
 		case string:
-			if strings.TrimSpace(content) != "" {
-				sb.WriteString(content)
-				sb.WriteString("\n")
-			}
+			return strings.TrimSpace(content)
 		case []any:
+			var sb strings.Builder
 			for _, blk := range content {
 				bm, ok := blk.(map[string]any)
 				if !ok {
@@ -409,11 +457,16 @@ func extractAnthropicInputText(payload map[string]any) string {
 					continue
 				}
 				if txt, ok := bm["text"].(string); ok && strings.TrimSpace(txt) != "" {
-					sb.WriteString(txt)
-					sb.WriteString("\n")
+					if sb.Len() > 0 {
+						sb.WriteString("\n")
+					}
+					sb.WriteString(strings.TrimSpace(txt))
 				}
 			}
+			return strings.TrimSpace(sb.String())
+		default:
+			return ""
 		}
 	}
-	return sb.String()
+	return ""
 }

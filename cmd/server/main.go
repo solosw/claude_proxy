@@ -21,7 +21,7 @@ func main() {
 	}
 
 	// 4. 设置 Gin 模式（后续可以从配置中读取）
-	gin.SetMode(gin.DebugMode)
+	gin.SetMode(gin.ReleaseMode)
 
 	// 5. 创建 Gin 路由器
 	router := gin.Default()

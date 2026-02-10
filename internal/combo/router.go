@@ -1,12 +1,42 @@
 package combo
 
 import (
-	"math/rand"
-	"strings"
-	"time"
-
 	"awesomeProject/internal/model"
+	"log"
+	"regexp"
+	"sort"
+	"strings"
 )
+
+func HasCustomBangKeyword(text string, keywords []string) bool {
+	for _, kw := range keywords {
+		kw = strings.TrimSpace(kw)
+		if kw == "" || !strings.HasPrefix(kw, "!") {
+			continue // 跳过无效关键词
+		}
+
+		base := kw[1:] // 提取 ! 后面的主体部分
+
+		var pattern string
+		if base == "" {
+			// 关键词是 "!" 本身
+			pattern = `!($|[\s\p{P}\p{S}])`
+		} else {
+			// 关键词是 "!xxx"，只转义 "xxx" 部分
+			pattern = `!` + regexp.QuoteMeta(base) + `($|[\s\p{P}\p{S}])`
+		}
+
+		matched, err := regexp.MatchString(pattern, text)
+		if err != nil {
+			// 如果仍然出错，可以打印或继续下一个关键词
+			continue
+		}
+		if matched {
+			return true
+		}
+	}
+	return false
+}
 
 // ChooseModelID 根据 combo 的 items、权重和关键词，从输入文本中选择一个子模型。
 //
@@ -18,14 +48,18 @@ func ChooseModelID(c *model.Combo, inputText string) string {
 		return ""
 	}
 
-	text := strings.ToLower(inputText)
+	text := strings.TrimSpace(inputText)
+	log.Printf("Input Text: %s\n", text)
 
 	// 1) 关键词命中优先
 	var (
-		bestID     string
-		bestWeight float64 = -1
-		found      bool
+		bestID string
+
+		found bool
 	)
+	sort.Slice(c.Items, func(i, j int) bool {
+		return c.Items[i].Weight > c.Items[j].Weight
+	})
 	for _, it := range c.Items {
 		if it.ModelID == "" {
 			continue
@@ -33,58 +67,18 @@ func ChooseModelID(c *model.Combo, inputText string) string {
 		if len(it.Keywords) == 0 {
 			continue
 		}
-		for _, kw := range it.Keywords {
-			kw = strings.ToLower(strings.TrimSpace(kw))
-			if kw == "" {
-				continue
-			}
-			if strings.Contains(text, kw) {
-				found = true
-				if it.Weight > bestWeight {
-					bestWeight = it.Weight
-					bestID = it.ModelID
-				}
-				break
-			}
+
+		if HasCustomBangKeyword(text, it.Keywords) {
+
+			bestID = it.ModelID
+			found = true
+			break
 		}
+
 	}
 	if found && bestID != "" {
 		return bestID
 	}
 
-	// 2) 按权重随机
-	total := 0.0
-	for _, it := range c.Items {
-		if it.ModelID == "" {
-			continue
-		}
-		if it.Weight > 0 {
-			total += it.Weight
-		}
-	}
-	if total <= 0 {
-		// 全部权重 <=0，退化为第一个有效 item
-		for _, it := range c.Items {
-			if it.ModelID != "" {
-				return it.ModelID
-			}
-		}
-		return ""
-	}
-
-	r := rand.New(rand.NewSource(time.Now().UnixNano()))
-	x := r.Float64() * total
-	for _, it := range c.Items {
-		if it.ModelID == "" || it.Weight <= 0 {
-			continue
-		}
-		x -= it.Weight
-		if x <= 0 {
-			return it.ModelID
-		}
-	}
-
-	// 兜底
 	return c.Items[0].ModelID
 }
-
