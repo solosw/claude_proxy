@@ -956,7 +956,7 @@
         while (turn <= MAX_TURNS) {
           const aReq = {
             model,
-            max_tokens: 80000,
+            max_tokens: 800000,
             messages,
             tools
           };

@@ -1,8 +1,16 @@
 ﻿# ClaudeRouter
 
 ClaudeRouter 是一个多模型反代网关。
-它把不同上游协议（Anthropic / OpenAI Chat / OpenAI Responses / Codex）统一到本地接口，重点解决“同一客户端如何切换不同反代源”。
+它把不同上游协议（Anthropic(claude) / OpenAI Chat / OpenAI Responses （Codex））统一到本地接口，重点解决“同一客户端如何切换不同反代源”。
 
+## 目前支持
+- 模型组合，根据关键词自动筛选模型
+- 支持claude->OpenAI Chat/OpenAI Responses （Codex）/Anthropic(claude)
+- 支持 codex->OpenAI Responses （Codex）
+## todo
+- 智能切换
+- 限流
+- codex->（Anthropic(claude)/OpenAI Chat
 ## 反代支持矩阵（重点）
 
 ### 1) 按 `interface_type` 反代（无 `operator_id` 时生效）
