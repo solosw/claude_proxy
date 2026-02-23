@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -96,13 +97,21 @@ func (a *OpenAIAdapter) Execute(ctx context.Context, payload map[string]any, opt
 	if !opts.MinimalOpenAI {
 		if toolsIn, ok := payload["tools"].([]any); ok && len(toolsIn) > 0 {
 			oaiReq.Tools = openAIToolsToSDK(anthropicToolsToOpenAI(toolsIn))
-			oaiReq.ToolChoice = "auto"
+			oaiReq.ToolChoice = "auto" // 默认 auto
 			if tc, ok := payload["tool_choice"].(map[string]any); ok {
-				if v, _ := tc["type"].(string); v == "none" {
+				v, _ := tc["type"].(string)
+				switch v {
+				case "none":
 					oaiReq.ToolChoice = "none"
-				} else if name, _ := tc["name"].(string); v == "tool" && name != "" {
-					oaiReq.ToolChoice = map[string]any{"type": "function", "function": map[string]any{"name": name}}
+				case "tool":
+					if name, _ := tc["name"].(string); name != "" {
+						oaiReq.ToolChoice = map[string]any{"type": "function", "function": map[string]any{"name": name}}
+					}
+				case "any":
+					// "any" - 强制使用工具（相当于 "required"）
+					oaiReq.ToolChoice = "required"
 				}
+				// "auto" 不需要额外处理，因为默认值就是 "auto"
 			}
 		}
 	}
@@ -122,6 +131,12 @@ func (a *OpenAIAdapter) Execute(ctx context.Context, payload map[string]any, opt
 	cfg.HTTPClient = &http.Client{Timeout: 600 * time.Second}
 	client := openai.NewClientWithConfig(cfg)
 
+	// 调试输出：发送给上游的请求体
+	if reqJSON, err := json.Marshal(oaiReq); err == nil {
+		logStep("openai adapter: payload_to_send=%s", string(reqJSON))
+	} else {
+		logStep("openai adapter: payload_to_send marshal err=%v", err)
+	}
 	if opts.Stream {
 		stream, errStream := client.CreateChatCompletionStream(ctx, oaiReq)
 		logStep("openai adapter: CreateChatCompletionStream done, err=%v", errStream)
@@ -195,11 +210,39 @@ func openAIMessagesToSDK(msgs []openAIMessage) []openai.ChatCompletionMessage {
 	out := make([]openai.ChatCompletionMessage, 0, len(msgs))
 	for _, m := range msgs {
 		msg := openai.ChatCompletionMessage{Role: m.role()}
-		if m.Content != nil {
+
+		// 处理文本和图片内容
+		hasImages := len(m.StringImages) > 0
+		hasText := m.Content != nil
+
+		if hasImages {
+			// 有图片：构建多模态内容数组
+			var contentParts []openai.ChatMessagePart
+			if hasText {
+				if s, ok := m.Content.(string); ok && strings.TrimSpace(s) != "" {
+					contentParts = append(contentParts, openai.ChatMessagePart{
+						Type: openai.ChatMessagePartTypeText,
+						Text: s,
+					})
+				}
+			}
+
+			for _, img := range m.StringImages {
+				contentParts = append(contentParts, openai.ChatMessagePart{
+					Type: openai.ChatMessagePartTypeImageURL,
+					ImageURL: &openai.ChatMessageImageURL{
+						URL: img,
+					},
+				})
+			}
+			msg.MultiContent = contentParts
+		} else if hasText {
+			// 无图片：直接使用文本内容
 			if s, ok := m.Content.(string); ok {
 				msg.Content = s
 			}
 		}
+
 		for _, tc := range m.ToolCalls {
 			msg.ToolCalls = append(msg.ToolCalls, openai.ToolCall{
 				ID:   tc.ID,
@@ -386,10 +429,22 @@ type openAITool struct {
 
 // openAIMessage 支持 text、assistant+tool_calls、tool 三种形态
 type openAIMessage struct {
-	Role       string           `json:"role"`
-	Content    interface{}      `json:"content,omitempty"` // string 或 null（当有 tool_calls 时）
-	ToolCalls  []openAIToolCall `json:"tool_calls,omitempty"`
-	ToolCallID string           `json:"tool_call_id,omitempty"` // role=tool 时
+	Role         string           `json:"role"`
+	Content      interface{}      `json:"content,omitempty"`      // string, []ContentPart, 或 null（当有 tool_calls 时）
+	StringImages []string         `json:"StringImages,omitempty"` // base64 图片列表，转换为 data:...;base64,...
+	ToolCalls    []openAIToolCall `json:"tool_calls,omitempty"`
+	ToolCallID   string           `json:"tool_call_id,omitempty"` // role=tool 时
+}
+
+// ContentPart 表示 OpenAI 多模态消息的内容块
+type ContentPart struct {
+	Type     string    `json:"type"` // "text" 或 "image_url"
+	Text     string    `json:"text,omitempty"`
+	ImageURL *ImageURL `json:"image_url,omitempty"`
+}
+
+type ImageURL struct {
+	URL string `json:"url"` // data:image/png;base64,... 或普通 URL
 }
 
 type openAIToolCall struct {
@@ -496,18 +551,40 @@ func anthropicMessageToOpenAI(role string, mm map[string]any) []openAIMessage {
 		}
 		return []openAIMessage{{Role: "assistant", Content: text}}
 	case "user":
-		text, toolResults := extractAnthropicUserContent(contentRaw)
+		text, toolResults, stringImages := extractAnthropicUserContent(contentRaw)
 		if len(toolResults) == 0 {
-			return []openAIMessage{{Role: "user", Content: text}}
+			return []openAIMessage{{Role: "user", Content: text, StringImages: stringImages}}
 		}
 		var list []openAIMessage
 		for _, tr := range toolResults {
 			list = append(list, openAIMessage{Role: "tool", ToolCallID: tr.toolUseID, Content: tr.content})
 		}
-		if strings.TrimSpace(text) != "" {
-			list = append(list, openAIMessage{Role: "user", Content: text})
+		if strings.TrimSpace(text) != "" || len(stringImages) > 0 {
+			list = append(list, openAIMessage{Role: "user", Content: text, StringImages: stringImages})
 		}
 		return list
+	case "developer":
+		text, toolUses := extractAnthropicDeveloperContent(contentRaw)
+		if len(toolUses) > 0 {
+			msg := openAIMessage{Role: "developer"}
+			if text != "" {
+				msg.Content = text
+			} else {
+				msg.Content = nil
+			}
+			for _, tu := range toolUses {
+				msg.ToolCalls = append(msg.ToolCalls, openAIToolCall{
+					ID:   tu.id,
+					Type: "function",
+					Function: struct {
+						Name      string `json:"name"`
+						Arguments string `json:"arguments"`
+					}{Name: tu.name, Arguments: tu.input},
+				})
+			}
+			return []openAIMessage{msg}
+		}
+		return []openAIMessage{{Role: "developer", Content: text}}
 	default:
 		content := extractAnthropicMessageContent(contentRaw)
 		return []openAIMessage{{Role: role, Content: content}}
@@ -560,7 +637,8 @@ func extractAnthropicAssistantContent(contentRaw any) (text string, toolUses []a
 	return "", nil
 }
 
-func extractAnthropicUserContent(contentRaw any) (text string, toolResults []anthropicToolResult) {
+// extractAnthropicDeveloperContent 从 developer 消息中提取文本内容和 tool_use
+func extractAnthropicDeveloperContent(contentRaw any) (text string, toolUses []anthropicToolUse) {
 	switch c := contentRaw.(type) {
 	case string:
 		return c, nil
@@ -577,6 +655,55 @@ func extractAnthropicUserContent(contentRaw any) (text string, toolResults []ant
 				if txt, ok := bm["text"].(string); ok {
 					sb.WriteString(txt)
 				}
+			case "tool_use":
+				id, _ := bm["id"].(string)
+				name, _ := bm["name"].(string)
+				inputStr := ""
+				if inp, ok := bm["input"].(map[string]any); ok {
+					b, _ := json.Marshal(inp)
+					inputStr = string(b)
+				} else if s, ok := bm["input"].(string); ok {
+					inputStr = s
+				}
+				toolUses = append(toolUses, anthropicToolUse{id: id, name: name, input: inputStr})
+			}
+		}
+		return sb.String(), toolUses
+	}
+	return "", nil
+}
+
+func extractAnthropicUserContent(contentRaw any) (text string, toolResults []anthropicToolResult, stringImages []string) {
+	switch c := contentRaw.(type) {
+	case string:
+		return c, nil, nil
+	case []any:
+		var sb strings.Builder
+		stringImages = []string{}
+		for _, blk := range c {
+			bm, ok := blk.(map[string]any)
+			if !ok {
+				continue
+			}
+			t, _ := bm["type"].(string)
+			switch t {
+			case "text":
+				if txt, ok := bm["text"].(string); ok {
+					sb.WriteString(txt)
+				}
+			case "image":
+				// 处理 image content，转换为 OpenAI 格式
+				if source, ok := bm["source"].(map[string]any); ok {
+					sourceType, _ := source["type"].(string)
+					if sourceType == "base64" {
+						data, _ := source["data"].(string)
+						mediaType, _ := source["media_type"].(string)
+						// 格式化为 data URI
+						dataURI := fmt.Sprintf("data:%s;base64,%s", mediaType, data)
+						// 暂时追加到 text（OpenAI 多模态需要特殊处理）
+						stringImages = append(stringImages, dataURI)
+					}
+				}
 			case "tool_result":
 				toolUseID, _ := bm["tool_use_id"].(string)
 				content := ""
@@ -590,9 +717,9 @@ func extractAnthropicUserContent(contentRaw any) (text string, toolResults []ant
 				toolResults = append(toolResults, anthropicToolResult{toolUseID: toolUseID, content: content})
 			}
 		}
-		return sb.String(), toolResults
+		return sb.String(), toolResults, stringImages
 	}
-	return "", nil
+	return "", nil, nil
 }
 
 func extractAnthropicMessageContent(contentRaw any) string {

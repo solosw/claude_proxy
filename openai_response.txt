@@ -1,0 +1,178 @@
+{
+  "id": "resp_03099133996cae2b01699bf8688468819c90f12beedfbb514b",
+  "model": "gpt-5.3-codex",
+  "object": "response",
+  "output": [
+    {
+      "action": {
+        "button": "",
+        "command": null,
+        "commands": null,
+        "env": null,
+        "keys": null,
+        "max_output_length": 0,
+        "path": null,
+        "pattern": "",
+        "queries": null,
+        "query": "",
+        "scroll_x": 0,
+        "scroll_y": 0,
+        "sources": null,
+        "text": "",
+        "timeout_ms": 0,
+        "type": "",
+        "url": "",
+        "user": "",
+        "working_directory": "",
+        "x": 0,
+        "y": 0
+      },
+      "approval_request_id": "",
+      "arguments": "",
+      "call_id": "",
+      "code": "",
+      "container_id": "",
+      "content": [
+        {
+          "annotations": [],
+          "logprobs": [],
+          "refusal": "",
+          "text": "好的。你要查看当前目录内容。  \n根据你的全局偏好（运行 bash 前先询问），我先确认一下：\n\n要不要现在运行 `ls` 来列出当前目录文件？",
+          "type": "output_text"
+        }
+      ],
+      "created_by": "",
+      "encrypted_content": "",
+      "environment": {
+        "container_id": "",
+        "type": ""
+      },
+      "error": "",
+      "id": "msg_03099133996cae2b01699bf869214c819c842522e45706876d",
+      "input": "",
+      "max_output_length": 0,
+      "name": "",
+      "operation": {
+        "diff": "",
+        "path": "",
+        "type": ""
+      },
+      "output": {
+        "OfResponseFunctionShellToolCallOutputOutputArray": null,
+        "OfString": ""
+      },
+      "outputs": null,
+      "pending_safety_checks": null,
+      "queries": null,
+      "result": "",
+      "results": null,
+      "role": "assistant",
+      "server_label": "",
+      "status": "completed",
+      "summary": null,
+      "tools": null,
+      "type": "message"
+    }
+  ],
+  "status": "completed",
+  "usage": {
+    "input_tokens": 6980,
+    "input_tokens_details": {
+      "cached_tokens": 0
+    },
+    "output_tokens": 47,
+    "output_tokens_details": {
+      "reasoning_tokens": 0
+    },
+    "total_tokens": 7027
+  }
+}
+{
+  "id": "resp_027bf631e77f801401699bf8678be4819ca6dc180389e3f853",
+  "model": "gpt-5.3-codex",
+  "object": "response",
+  "output": [
+    {
+      "action": {
+        "button": "",
+        "command": null,
+        "commands": null,
+        "env": null,
+        "keys": null,
+        "max_output_length": 0,
+        "path": null,
+        "pattern": "",
+        "queries": null,
+        "query": "",
+        "scroll_x": 0,
+        "scroll_y": 0,
+        "sources": null,
+        "text": "",
+        "timeout_ms": 0,
+        "type": "",
+        "url": "",
+        "user": "",
+        "working_directory": "",
+        "x": 0,
+        "y": 0
+      },
+      "approval_request_id": "",
+      "arguments": "",
+      "call_id": "",
+      "code": "",
+      "container_id": "",
+      "content": [
+        {
+          "annotations": [],
+          "logprobs": [],
+          "refusal": "",
+          "text": "确认执行命令前先澄清用户意图",
+          "type": "output_text"
+        }
+      ],
+      "created_by": "",
+      "encrypted_content": "",
+      "environment": {
+        "container_id": "",
+        "type": ""
+      },
+      "error": "",
+      "id": "msg_027bf631e77f801401699bf868e114819c86e5ff69f50a1013",
+      "input": "",
+      "max_output_length": 0,
+      "name": "",
+      "operation": {
+        "diff": "",
+        "path": "",
+        "type": ""
+      },
+      "output": {
+        "OfResponseFunctionShellToolCallOutputOutputArray": null,
+        "OfString": ""
+      },
+      "outputs": null,
+      "pending_safety_checks": null,
+      "queries": null,
+      "result": "",
+      "results": null,
+      "role": "assistant",
+      "server_label": "",
+      "status": "completed",
+      "summary": null,
+      "tools": null,
+      "type": "message"
+    }
+  ],
+  "status": "completed",
+  "usage": {
+    "input_tokens": 1642,
+    "input_tokens_details": {
+      "cached_tokens": 1408
+    },
+    "output_tokens": 16,
+    "output_tokens_details": {
+      "reasoning_tokens": 0
+    },
+    "total_tokens": 1658
+  }
+}

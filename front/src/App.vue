@@ -31,6 +31,9 @@ const handleMenuSelect = (path) => {
         <el-menu-item index="/combos">
           <span>组合模型</span>
         </el-menu-item>
+        <el-menu-item index="/api-test">
+          <span>测试</span>
+        </el-menu-item>
       </el-menu>
     </el-aside>
     <el-container>

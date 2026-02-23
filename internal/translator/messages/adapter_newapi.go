@@ -67,6 +67,9 @@ func (a *NewAPIAdapter) Execute(ctx context.Context, payload map[string]any, opt
 		return 0, "", nil, nil, err
 	}
 
+	// 调试输出：发送给上游的请求体
+	logStep("newapi adapter: payload_to_send=%s", string(reqBody))
+
 	baseURL := strings.TrimRight(strings.TrimSpace(opts.BaseURL), "/")
 	if baseURL == "" {
 		baseURL = "https://api.newapi.pro"

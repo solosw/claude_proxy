@@ -21,5 +21,8 @@ type Model struct {
 
 	// 若不为空，表示该模型归属该运营商，请求走运营商专属 API（BaseURL、APIKey 以运营商为准）
 	OperatorID string `json:"operator_id"`
+
+	// ResponseFormat 响应格式类型：anthropic（默认）、openai（OpenAI Chat Completion）、openai_responses（OpenAI Responses API）
+	ResponseFormat string `json:"response_format"`
 }
 

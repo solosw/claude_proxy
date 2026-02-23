@@ -26,6 +26,12 @@ const routes = [
     path: '/combos',
     component: CombosView,
   },
+  {
+    path: '/api-test',
+    name: 'ApiTest',
+    component: () => import('@/views/ApiTestView.vue')
+  }
+
 ];
 
 const router = createRouter({

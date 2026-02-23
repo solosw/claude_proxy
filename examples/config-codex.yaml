@@ -1,0 +1,96 @@
+# Codex 运营商配置示例
+
+# 1. 添加 Codex 运营商
+operators:
+  codex:
+    enabled: true
+    # Codex API 基础 URL（ChatGPT 后端 API）
+    base_url: "https://chatgpt.com/backend-api"
+    # 你的 Codex Token（从 ChatGPT 获取）
+    api_key: "your-codex-token-here"
+    # 接口类型（codex 运营商会自动处理格式转换）
+    interface: "codex"
+
+# 2. 添加 Codex 模型
+models:
+  # Codex 5.3 - 最新旗舰编程模型
+  - id: "codex-5.3"
+    display_name: "Codex 5.3 (Latest)"
+    enabled: true
+    operator_id: "codex"
+    upstream_id: "gpt-5.3-codex"
+    forward_metadata: true
+    forward_thinking: true
+
+  # Codex Max - 深度推理编程模型
+  - id: "codex-max"
+    display_name: "Codex Max (Deep Reasoning)"
+    enabled: true
+    operator_id: "codex"
+    upstream_id: "gpt-5.1-codex-max"
+    forward_metadata: true
+    forward_thinking: true
+
+  # Codex Mini - 轻量快速编程模型
+  - id: "codex-mini"
+    display_name: "Codex Mini (Fast)"
+    enabled: true
+    operator_id: "codex"
+    upstream_id: "gpt-5.1-codex-mini"
+    forward_metadata: true
+    forward_thinking: true
+
+  # Codex 5.2 - 上一代模型
+  - id: "codex-5.2"
+    display_name: "Codex 5.2"
+    enabled: true
+    operator_id: "codex"
+    upstream_id: "gpt-5.2-codex"
+    forward_metadata: true
+    forward_thinking: true
+
+# 3. 可选：创建智能组合模型
+combos:
+  # 根据输入长度自动选择合适的 Codex 模型
+  - id: "codex-auto"
+    display_name: "Codex Auto (Smart Selection)"
+    enabled: true
+    items:
+      # 短对话使用 mini（快速响应）
+      - model_id: "codex-mini"
+        weight: 1
+        input_tokens_limit: 10000
+
+      # 中等对话使用 5.3（平衡性能）
+      - model_id: "codex-5.3"
+        weight: 1
+        input_tokens_limit: 50000
+
+      # 长对话或复杂任务使用 max（深度推理）
+      - model_id: "codex-max"
+        weight: 1
+        input_tokens_limit: 0
+
+  # 编程专用组合：优先使用 Codex，回退到其他模型
+  - id: "coding-combo"
+    display_name: "Coding Combo"
+    enabled: true
+    items:
+      - model_id: "codex-5.3"
+        weight: 10
+      - model_id: "claude-3-5-sonnet-20241022"
+        weight: 1
+
+# 客户端使用方法：
+#
+# 1. 设置 API Base URL：
+#    http://localhost:8080/v1/messages
+#
+# 2. 选择模型：
+#    - codex-5.3（最新模型）
+#    - codex-max（深度推理）
+#    - codex-mini（快速响应）
+#    - codex-auto（自动选择）
+#
+# 3. 正常发送 Anthropic Messages API 格式的请求
+#    ClaudeRouter 会自动转换为 Codex 格式

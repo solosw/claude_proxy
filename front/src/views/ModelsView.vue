@@ -23,6 +23,7 @@ const form = reactive({
   forward_thinking: false,
   max_qps: 0,
   operator_id: '',
+  response_format: '',
 });
 
 const formRules = {
@@ -71,6 +72,7 @@ const openCreate = () => {
     forward_thinking: false,
     max_qps: 0,
     operator_id: '',
+    response_format: '',
   });
   dialogVisible.value = true;
 };
@@ -82,6 +84,7 @@ const openEdit = (row) => {
 };
 
 const submitForm = () => {
+  watchInterfaceType(); // 确保响应格式与接口类型匹配
   formRef.value.validate(async (valid) => {
     if (!valid) return;
     try {
@@ -125,6 +128,15 @@ const chatInput = ref('');
 const chatMessages = ref([]);
 
 const selectedInterface = computed(() => selectedModel.value?.interface_type || 'openai');
+
+// 监听接口类型变化：选 OpenAI Responses 接口时，响应格式默认为 Anthropic
+const watchInterfaceType = () => {
+  if (form.interface_type === 'openai_responses') {
+    form.response_format = ''; // Anthropic（默认）
+  } else if (form.response_format === 'openai_responses' && form.interface_type !== 'openai_responses') {
+    form.response_format = '';
+  }
+};
 
 const openChat = (row) => {
   selectedModel.value = row;
@@ -177,6 +189,20 @@ const parseAnthropicSSEData = (dataLine) => {
   return null;
 };
 
+const parseOpenAIResponsesSSEData = (dataLine) => {
+  if (!dataLine) return null;
+  try {
+    const obj = JSON.parse(dataLine);
+    // OpenAI Responses API: content_delta -> delta.text
+    if (obj?.type === 'content_delta' && obj?.delta?.text) {
+      return { delta: obj.delta.text };
+    }
+  } catch (_) {
+    // ignore
+  }
+  return null;
+};
+
 const streamChat = async (payload) => {
   const token = localStorage.getItem('token') || '';
   const resp = await fetch('/back/api/chat/test', {
@@ -215,6 +241,8 @@ const streamChat = async (payload) => {
       let parsed = null;
       if (selectedInterface.value === 'anthropic') {
         parsed = parseAnthropicSSEData(dataLine);
+      } else if (selectedInterface.value === 'openai_responses' || selectedModel.value?.response_format === 'openai_responses') {
+        parsed = parseOpenAIResponsesSSEData(dataLine);
       } else {
         parsed = parseOpenAISSEData(dataLine);
       }
@@ -257,6 +285,10 @@ const sendChat = async () => {
         .map(b => b?.text || '')
         .join('');
       chatMessages.value.push({ role: 'assistant', content: text || JSON.stringify(data) });
+    } else if (selectedInterface.value === 'openai_responses') {
+      // OpenAI Responses API 返回结构
+      const text = data?.message?.content || JSON.stringify(data);
+      chatMessages.value.push({ role: 'assistant', content: text });
     } else {
       const text = data?.choices?.[0]?.message?.content;
       chatMessages.value.push({ role: 'assistant', content: text || JSON.stringify(data) });
@@ -294,7 +326,14 @@ onMounted(() => {
       <el-table-column prop="name" label="名称" width="180" />
       <el-table-column prop="provider" label="服务商" width="140" />
       <el-table-column prop="interface_type" label="接口类型" width="160" />
-      <el-table-column prop="upstream_id" label="上游模型名" width="220" />
+      <el-table-column prop="response_format" label="响应格式" width="160">
+        <template #default="{ row }">
+          <el-tag v-if="row.response_format === 'openai_responses'" type="info" size="small">
+            OpenAI Responses
+          </el-tag>
+          <span v-else class="text-gray-400">Anthropic（默认）</span>
+        </template>
+      </el-table-column>
       <el-table-column prop="base_url" label="Base URL" width="260" />
       <el-table-column prop="api_key" label="上游 API Key" width="260">
         <template #default="{ row }">
@@ -383,9 +422,23 @@ onMounted(() => {
           >
             <el-option label="OpenAI Chat Completions" value="openai" />
             <el-option label="OpenAI 兼容" value="openai_compatible" />
+            <el-option label="OpenAI Responses API" value="openai_responses" />
             <el-option label="Anthropic Messages" value="anthropic" />
           </el-select>
           <div v-if="form.operator_id" class="form-hint">归属运营商时可由运营商配置覆盖</div>
+        </el-form-item>
+        <el-form-item label="响应格式">
+          <el-select
+            v-model="form.response_format"
+            placeholder="选择响应格式（默认 Anthropic）"
+            clearable
+            style="width: 100%;"
+          >
+            <el-option label="Anthropic（默认）" value="" />
+            <el-option label="Anthropic" value="anthropic" />
+            <el-option label="OpenAI Responses API" value="openai_responses" />
+          </el-select>
+          <div class="form-hint">选 OpenAI Responses 接口时也默认为 Anthropic；若需 /back/v1/messages 返回 OpenAI Responses 格式，可在此选择「OpenAI Responses API」</div>
         </el-form-item>
         <el-form-item label="上游模型名" prop="upstream_id">
           <el-input v-model="form.upstream_id" placeholder="例如 gpt-4.1 / claude-3-5-sonnet-20241022" />

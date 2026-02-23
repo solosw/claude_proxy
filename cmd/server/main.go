@@ -3,6 +3,7 @@ package main
 import (
 	"log"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
@@ -11,6 +12,8 @@ import (
 	"awesomeProject/internal/middleware"
 	"awesomeProject/internal/model"
 	"awesomeProject/internal/storage"
+
+	"github.com/jchv/go-webview2"
 )
 
 func main() {
@@ -21,7 +24,7 @@ func main() {
 	}
 
 	// 4. 设置 Gin 模式（后续可以从配置中读取）
-	gin.SetMode(gin.ReleaseMode)
+	gin.SetMode(gin.DebugMode)
 
 	// 5. 创建 Gin 路由器
 	router := gin.Default()
@@ -111,8 +114,36 @@ func main() {
 		})
 	})
 
-	// 启动服务器
-	if err := router.Run(cfg.Server.Addr); err != nil {
-		log.Fatalf("failed to start server: %v", err)
+	// 在 goroutine 中启动服务器
+	go func() {
+		log.Printf("server starting on %s", cfg.Server.Addr)
+		if err := router.Run(cfg.Server.Addr); err != nil {
+			log.Fatalf("failed to start server: %v", err)
+		}
+	}()
+
+	// 等待服务器启动
+	time.Sleep(500 * time.Millisecond)
+
+	// 启动 WebView2 窗口
+	url := "http://" + cfg.Server.Addr
+	w := webview2.NewWithOptions(webview2.WebViewOptions{
+		Debug:     false,
+		AutoFocus: true,
+
+		WindowOptions: webview2.WindowOptions{
+			Title:  "Claude",
+			Width:  1200,
+			Height: 800,
+			Center: true,
+		},
+	})
+	if w == nil {
+		log.Fatalln("Failed to load webview2, please ensure WebView2 runtime is installed.")
 	}
+	defer w.Destroy()
+	w.SetSize(1200, 800, webview2.HintNone)
+	log.Printf("opening webview: %s", url)
+	w.Navigate(url)
+	w.Run()
 }

@@ -2,6 +2,7 @@ package messages
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
 	"strings"
@@ -23,6 +24,13 @@ func (a *AnthropicAdapter) Execute(ctx context.Context, payload map[string]any, 
 		reqBody[k] = v
 	}
 	reqBody["model"] = opts.UpstreamModel
+
+	// 调试输出：发送给上游的请求体
+	if reqJSON, err := json.Marshal(reqBody); err == nil {
+		logStep("anthropic adapter: payload_to_send=%s", string(reqJSON))
+	} else {
+		logStep("anthropic adapter: payload_to_send marshal err=%v", err)
+	}
 
 	baseURL := strings.TrimRight(strings.TrimSpace(opts.BaseURL), "/")
 	if baseURL == "" {

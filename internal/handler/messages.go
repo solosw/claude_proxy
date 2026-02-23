@@ -91,29 +91,41 @@ func anthropicError(c *gin.Context, status int, errorType, message string) {
 	})
 }
 
-// anthropicErrorFromBody 根据上游状态码和 body 按 Claude 格式返回错误（对话过程中上游 4xx/5xx 时使用）。
-func anthropicErrorFromBody(c *gin.Context, statusCode int, body []byte) {
+// extractUpstreamErrorMessage 从上游错误 body 中解析出 message，用于日志与返回。
+func extractUpstreamErrorMessage(body []byte) string {
 	message := "Upstream request failed"
-	if len(body) > 0 {
-		var m map[string]any
-		if json.Unmarshal(body, &m) == nil {
-			if errObj, _ := m["error"].(map[string]any); errObj != nil {
-				if msg, _ := errObj["message"].(string); msg != "" {
-					message = msg
-				}
-			} else if errObj, _ := m["errors"].(map[string]any); errObj != nil {
-				if msg, _ := errObj["message"].(string); msg != "" {
-					message = msg
-				}
-			} else if msg, _ := m["message"].(string); msg != "" {
-				message = msg
-			} else if msg, _ := m["error"].(string); msg != "" {
-				message = msg
-			}
-		} else if len(body) <= 500 {
-			message = string(body)
+	if len(body) == 0 {
+		return message
+	}
+	var m map[string]any
+	if json.Unmarshal(body, &m) != nil {
+		if len(body) <= 500 {
+			return string(body)
+		}
+		return message
+	}
+	if errObj, _ := m["error"].(map[string]any); errObj != nil {
+		if msg, _ := errObj["message"].(string); msg != "" {
+			return msg
 		}
 	}
+	if errObj, _ := m["errors"].(map[string]any); errObj != nil {
+		if msg, _ := errObj["message"].(string); msg != "" {
+			return msg
+		}
+	}
+	if msg, _ := m["message"].(string); msg != "" {
+		return msg
+	}
+	if msg, _ := m["error"].(string); msg != "" {
+		return msg
+	}
+	return message
+}
+
+// anthropicErrorFromBody 根据上游状态码和 body 按 Claude 格式返回错误（对话过程中上游 4xx/5xx 时使用）。
+func anthropicErrorFromBody(c *gin.Context, statusCode int, body []byte) {
+	message := extractUpstreamErrorMessage(body)
 	errorType := "api_error"
 	if statusCode >= 400 && statusCode < 500 {
 		errorType = "invalid_request_error"
@@ -297,6 +309,8 @@ func (h *MessagesHandler) handleMessages(c *gin.Context) {
 		switch interfaceType {
 		case "openai", "openai_compatible":
 			baseURL = "https://api.openai.com"
+		case "openai_responses":
+			baseURL = "https://api.openai.com"
 		default:
 			baseURL = "https://api.anthropic.com"
 		}
@@ -304,6 +318,24 @@ func (h *MessagesHandler) handleMessages(c *gin.Context) {
 
 	// 按模型配置决定是否保留扩展字段（metadata、thinking），避免上游 422
 	payloadToSend := applyForwardExtendedFields(payload, targetModel.ForwardMetadata, targetModel.ForwardThinking)
+
+	// 功能1：去掉关键字，将 payload 中的 model 替换为实际的模型 ID
+	// 这样上游收到的是真实模型 ID，而不是 combo ID
+	if cachedModelID == "" && requestedModel != targetModel.ID {
+		// 首次请求：requestedModel 是 combo ID，需要替换为实际的 targetModel.ID
+		payloadToSend["model"] = targetModel.ID
+		utils.Logger.Printf("[ClaudeRouter] messages: step=replace_model_in_payload from=%s to=%s", requestedModel, targetModel.ID)
+	} else if cachedModelID != "" {
+		// 后续请求：requestedModel 已经是缓存的模型 ID，保持不变
+		payloadToSend["model"] = targetModel.ID
+	}
+
+	// 调试输出：Anthropic 转换后的消息
+	if payloadJSON, err := json.Marshal(payloadToSend); err == nil {
+		utils.Logger.Printf("[ClaudeRouter] messages: payload_to_send=%s", string(payloadJSON))
+	} else {
+		utils.Logger.Printf("[ClaudeRouter] messages: payload_to_send marshal err=%v", err)
+	}
 
 	// 按模型配置的 QPS 限流
 	waitModelQPS(c.Request.Context(), targetModel.ID, targetModel.MaxQPS)
@@ -349,11 +381,22 @@ func (h *MessagesHandler) handleMessages(c *gin.Context) {
 
 	if err != nil {
 		utils.Logger.Printf("[ClaudeRouter] messages: step=execute_err err=%v", err)
+
+		// 功能2：模型报错时删除缓存
+		if conversationID != "" {
+			conversationModelMu.Lock()
+			delete(conversationModel, conversationID)
+			conversationModelMu.Unlock()
+			utils.Logger.Printf("[ClaudeRouter] messages: step=clear_cache due_to_error user_id=%s", conversationID)
+		}
+
 		if c.Request.Context().Err() != nil {
 			utils.Logger.Printf("[ClaudeRouter] messages: client_gone, skip error response")
 			return
 		}
 		if statusCode >= 400 {
+			upstreamMsg := extractUpstreamErrorMessage(body)
+			utils.Logger.Printf("[ClaudeRouter] messages: step=upstream_error status=%d message=%s", statusCode, upstreamMsg)
 			anthropicErrorFromBody(c, statusCode, body)
 			return
 		}
@@ -370,23 +413,83 @@ func (h *MessagesHandler) handleMessages(c *gin.Context) {
 	}
 
 	if statusCode < 200 || statusCode >= 300 {
-		utils.Logger.Printf("[ClaudeRouter] messages: step=upstream_non_2xx status=%d", statusCode)
+		// 功能2：上游返回错误状态码时也删除缓存
+		if conversationID != "" {
+			conversationModelMu.Lock()
+			delete(conversationModel, conversationID)
+			conversationModelMu.Unlock()
+			utils.Logger.Printf("[ClaudeRouter] messages: step=clear_cache due_to_status=%d user_id=%s", statusCode, conversationID)
+		}
+
+		upstreamMsg := extractUpstreamErrorMessage(body)
+		utils.Logger.Printf("[ClaudeRouter] messages: step=upstream_error status=%d message=%s", statusCode, upstreamMsg)
 		anthropicErrorFromBody(c, statusCode, body)
 		return
 	}
 
 	if stream && streamBody != nil {
-		utils.Logger.Printf("[ClaudeRouter] messages: step=stream_write")
+		utils.Logger.Printf("[ClaudeRouter] messages: step=stream_write interface_type=%s response_format=%s", interfaceType, targetModel.ResponseFormat)
 		defer streamBody.Close()
+
+		// 上游为 openai_responses 时，上游返回 OpenAI Responses SSE，需转为 Anthropic 再返回（除非 response_format 指定为 openai_responses）
+		if strings.EqualFold(interfaceType, "openai_responses") && !strings.EqualFold(targetModel.ResponseFormat, "openai_responses") {
+			utils.Logger.Printf("[ClaudeRouter] messages: converting OpenAI Responses stream to Anthropic")
+			pr, pw := io.Pipe()
+			go func() {
+				defer pw.Close()
+				messages.ConvertOpenAIResponsesStreamToAnthropic(c.Request.Context(), streamBody, pw)
+			}()
+			c.Header("Content-Type", "text/event-stream")
+			utils.ProxySSE(c, pr)
+			return
+		}
+		// 上游为 Anthropic 且 response_format 为 openai_responses 时，转为 OpenAI Responses 格式
+		if strings.EqualFold(targetModel.ResponseFormat, "openai_responses") {
+			utils.Logger.Printf("[ClaudeRouter] messages: converting Anthropic stream to OpenAI Responses format")
+			pr, pw := io.Pipe()
+			go func() {
+				defer pw.Close()
+				messages.ConvertAnthropicStreamToOpenAIResponses(c.Request.Context(), streamBody, pw)
+			}()
+			c.Header("Content-Type", "text/event-stream")
+			utils.ProxySSE(c, pr)
+			return
+		}
+		// 默认：直接透传 Anthropic 流
+		c.Header("Content-Type", "text/event-stream")
 		utils.ProxySSE(c, streamBody)
 		return
 	}
 
-	utils.Logger.Printf("[ClaudeRouter] messages: step=write_response status=%d len=%d", statusCode, len(body))
 	ct := contentType
 	if ct == "" {
 		ct = "application/json"
 	}
+	// 非流式：上游为 openai_responses 且未要求返回 OpenAI 格式时，将 OpenAI Responses JSON 转为 Anthropic
+	if strings.EqualFold(interfaceType, "openai_responses") && !strings.EqualFold(targetModel.ResponseFormat, "openai_responses") {
+		converted, convErr := messages.ConvertOpenAIResponsesMessageToAnthropic(body)
+		if convErr != nil {
+			utils.Logger.Printf("[ClaudeRouter] messages: step=convert_openai_responses_to_anthropic err=%v", convErr)
+			anthropicError(c, http.StatusInternalServerError, "api_error", "Failed to convert response format")
+			return
+		}
+		body = converted
+		ct = "application/json"
+		utils.Logger.Printf("[ClaudeRouter] messages: step=write_response converted openai_responses->anthropic len=%d", len(body))
+	} else if strings.EqualFold(targetModel.ResponseFormat, "openai_responses") {
+		// 上游为 Anthropic，需返回 OpenAI Responses 格式
+		converted, convErr := messages.ConvertAnthropicMessageToOpenAIResponses(body)
+		if convErr != nil {
+			utils.Logger.Printf("[ClaudeRouter] messages: step=convert_anthropic_to_openai_responses err=%v", convErr)
+			anthropicError(c, http.StatusInternalServerError, "api_error", "Failed to convert response format")
+			return
+		}
+		body = converted
+		ct = "application/json"
+		utils.Logger.Printf("[ClaudeRouter] messages: step=write_response converted to openai_responses len=%d", len(body))
+	}
+
+	utils.Logger.Printf("[ClaudeRouter] messages: step=write_response status=%d len=%d", statusCode, len(body))
 	c.Data(statusCode, ct, body)
 }
 

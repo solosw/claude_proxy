@@ -45,6 +45,8 @@ func (s *MinimaxStrategy) Execute(ctx context.Context, payload map[string]any, o
 		logStep("operator minimax: err=json marshal %v", err)
 		return 0, "", nil, nil, err
 	}
+	// 调试输出：发送给上游的请求体
+	logStep("operator minimax: payload_to_send=%s", string(reqBody))
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(reqBody))
 	if err != nil {
