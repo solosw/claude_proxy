@@ -204,15 +204,99 @@ func ConvertOpenAIResponsesStreamToAnthropic(ctx context.Context, r io.Reader, w
 	scanner.Buffer(nil, 512*1024)
 
 	var (
-		messageStarted    bool
-		currentBlockIndex int
-		blockIndexMap     map[int]int // OpenAI output index -> Anthropic block index
-		stopReason        string
-		currentToolUseID  string
-		currentToolName   string
-		toolInputBuffer   strings.Builder
+		messageStarted bool
+		currentBlock   int
+		blockIndexMap  = make(map[int]int) // output_index -> anthropic block index
+		stopReason     string
+
+		toolUseIDByOutput = make(map[int]string)
+		toolNameByOutput  = make(map[int]string)
+		toolInputByOutput = make(map[int]*strings.Builder)
 	)
-	blockIndexMap = make(map[int]int)
+
+	startMessage := func(obj map[string]any) {
+		if messageStarted {
+			return
+		}
+		messageStarted = true
+		id := "msg-" + generateID()
+		model := "unknown"
+		if obj != nil {
+			id = getStr(obj, "id", id)
+			model = getStr(obj, "model", model)
+		}
+		writeAnthropicSSE(w, "message_start", map[string]any{
+			"type": "message_start",
+			"message": map[string]any{
+				"id":    id,
+				"type":  "message",
+				"role":  "assistant",
+				"model": model,
+				"usage": map[string]any{"input_tokens": 0, "output_tokens": 0},
+			},
+		})
+	}
+
+	ensureTextBlock := func(outputIdx int) int {
+		if idx, ok := blockIndexMap[outputIdx]; ok {
+			return idx
+		}
+		idx := currentBlock
+		currentBlock++
+		blockIndexMap[outputIdx] = idx
+		writeAnthropicSSE(w, "content_block_start", map[string]any{
+			"type":  "content_block_start",
+			"index": idx,
+			"content_block": map[string]any{
+				"type": "text",
+				"text": "",
+			},
+		})
+		return idx
+	}
+
+	ensureToolBlock := func(outputIdx int, toolID, toolName string) int {
+		if idx, ok := blockIndexMap[outputIdx]; ok {
+			return idx
+		}
+		if toolID == "" {
+			toolID = "toolu_" + generateID()
+		}
+		if toolName == "" {
+			toolName = "unknown"
+		}
+		toolUseIDByOutput[outputIdx] = toolID
+		toolNameByOutput[outputIdx] = toolName
+
+		idx := currentBlock
+		currentBlock++
+		blockIndexMap[outputIdx] = idx
+		writeAnthropicSSE(w, "content_block_start", map[string]any{
+			"type":  "content_block_start",
+			"index": idx,
+			"content_block": map[string]any{
+				"type": "tool_use",
+				"id":   toolID,
+				"name": toolName,
+			},
+		})
+		return idx
+	}
+
+	closeBlock := func(outputIdx int) {
+		idx, ok := blockIndexMap[outputIdx]
+		if !ok {
+			return
+		}
+		writeAnthropicSSE(w, "content_block_stop", map[string]any{
+			"type":  "content_block_stop",
+			"index": idx,
+		})
+		delete(blockIndexMap, outputIdx)
+		delete(toolUseIDByOutput, outputIdx)
+		delete(toolNameByOutput, outputIdx)
+		delete(toolInputByOutput, outputIdx)
+	}
 
 	for scanner.Scan() {
 		if ctx.Err() != nil {
@@ -237,72 +321,45 @@ func ConvertOpenAIResponsesStreamToAnthropic(ctx context.Context, r io.Reader, w
 
 		switch eventType {
 		case "response.created", "response_start":
-			// OpenAI Responses API 使用 "response.created" 或旧版 "response_start"
-			if !messageStarted {
-				messageStarted = true
-				var obj map[string]any
-				if json.Unmarshal([]byte(dataStr), &obj) == nil {
-					writeAnthropicSSE(w, "message_start", map[string]any{
-						"type": "message_start",
-						"message": map[string]any{
-							"id":    getStr(obj, "id", "msg-"+generateID()),
-							"type":  "message",
-							"role":  "assistant",
-							"model": getStr(obj, "model", "unknown"),
-							"usage": map[string]any{"input_tokens": 0, "output_tokens": 0},
-						},
-					})
-				}
-			}
+			var obj map[string]any
+			_ = json.Unmarshal([]byte(dataStr), &obj)
+			startMessage(obj)
 
 		case "response.in_progress":
 			// 进行中状态，跳过
 			continue
 
 		case "response.output_item.added":
-			// 新的输出项添加，准备开始新块
-			// 注意：实际的块开始在收到具体内容时才发送
-			continue
+			var obj map[string]any
+			if json.Unmarshal([]byte(dataStr), &obj) != nil {
+				continue
+			}
+			startMessage(obj)
+			outputIdx := getEventOutputIndex(obj)
+			item, _ := obj["item"].(map[string]any)
+			if item == nil {
+				continue
+			}
+			if itemType, _ := item["type"].(string); itemType == "function_call" {
+				toolID := strings.TrimSpace(getStr(item, "call_id", ""))
+				toolName := strings.TrimSpace(getStr(item, "name", ""))
+				ensureToolBlock(outputIdx, toolID, toolName)
+			}
 
 		case "response.output_text.delta":
 			// OpenAI Responses API 的文本增量事件
-			if !messageStarted {
-				messageStarted = true
-				writeAnthropicSSE(w, "message_start", map[string]any{
-					"type": "message_start",
-					"message": map[string]any{
-						"id":    "msg-" + generateID(),
-						"type":  "message",
-						"role":  "assistant",
-						"model": "unknown",
-						"usage": map[string]any{"input_tokens": 0, "output_tokens": 0},
-					},
-				})
-			}
-
 			var obj map[string]any
 			if json.Unmarshal([]byte(dataStr), &obj) == nil {
-				outputIdx := int(getFloat(obj, "output_index", 0))
+				startMessage(obj)
+				outputIdx := getEventOutputIndex(obj)
 				delta, _ := obj["delta"].(string)
 
 				// 检查是否需要发送 content_block_start
-				if _, exists := blockIndexMap[outputIdx]; !exists {
-					blockIndexMap[outputIdx] = currentBlockIndex
-					writeAnthropicSSE(w, "content_block_start", map[string]any{
-						"type":  "content_block_start",
-						"index": currentBlockIndex,
-						"content_block": map[string]any{
-							"type": "text",
-							"text": "",
-						},
-					})
-					currentBlockIndex++
-				}
-
 				if delta != "" {
+					blockIdx := ensureTextBlock(outputIdx)
 					writeAnthropicSSE(w, "content_block_delta", map[string]any{
 						"type":  "content_block_delta",
-						"index": blockIndexMap[outputIdx],
+						"index": blockIdx,
 						"delta": map[string]any{
 							"type": "text_delta",
 							"text": delta,
@@ -313,65 +370,31 @@ func ConvertOpenAIResponsesStreamToAnthropic(ctx context.Context, r io.Reader, w
 
 		case "response.function_call_arguments.delta":
 			// 工具调用参数增量
-			if !messageStarted {
-				messageStarted = true
-				writeAnthropicSSE(w, "message_start", map[string]any{
-					"type": "message_start",
-					"message": map[string]any{
-						"id":    "msg-" + generateID(),
-						"type":  "message",
-						"role":  "assistant",
-						"model": "unknown",
-						"usage": map[string]any{"input_tokens": 0, "output_tokens": 0},
-					},
-				})
-			}
-
 			var obj map[string]any
 			if json.Unmarshal([]byte(dataStr), &obj) == nil {
-				outputIdx := int(getFloat(obj, "output_index", 0))
-				delta, _ := obj["delta"].(map[string]any)
+				startMessage(obj)
+				outputIdx := getEventOutputIndex(obj)
+				delta, _ := obj["delta"].(string)
 
-				// 首次遇到此输出项，发送 content_block_start
-				if _, exists := blockIndexMap[outputIdx]; !exists {
-					blockIndexMap[outputIdx] = currentBlockIndex
-
-					// 从 delta 中提取工具信息
-					if delta != nil {
-						if name, ok := delta["name"].(string); ok && name != "" {
-							currentToolName = name
-						}
-						currentToolUseID = "toolu_" + generateID()
+				if name, _ := obj["name"].(string); strings.TrimSpace(name) != "" {
+					toolNameByOutput[outputIdx] = strings.TrimSpace(name)
+				}
+				blockIdx := ensureToolBlock(outputIdx, toolUseIDByOutput[outputIdx], toolNameByOutput[outputIdx])
+				if delta != "" {
+					buf := toolInputByOutput[outputIdx]
+					if buf == nil {
+						buf = &strings.Builder{}
+						toolInputByOutput[outputIdx] = buf
 					}
-
-					writeAnthropicSSE(w, "content_block_start", map[string]any{
-						"type":  "content_block_start",
-						"index": currentBlockIndex,
-						"content_block": map[string]any{
-							"type": "tool_use",
-							"id":   currentToolUseID,
-							"name": currentToolName,
+					buf.WriteString(delta)
+					writeAnthropicSSE(w, "content_block_delta", map[string]any{
+						"type":  "content_block_delta",
+						"index": blockIdx,
+						"delta": map[string]any{
+							"type":         "input_json_delta",
+							"partial_json": delta,
 						},
 					})
-					currentBlockIndex++
-					toolInputBuffer.Reset()
-				}
-
-				// 累积工具参数
-				if delta != nil {
-					// 提取命令和描述等参数
-					for key, val := range delta {
-						if key == "name" {
-							// name 已在 start 中处理
-							continue
-						}
-						if strVal, ok := val.(string); ok && strVal != "" {
-							if toolInputBuffer.Len() > 0 {
-								toolInputBuffer.WriteString(",")
-							}
-							toolInputBuffer.WriteString(`"` + key + `":"` + escapeJSON(strVal) + `"`)
-						}
-					}
 				}
 			}
 
@@ -379,15 +402,24 @@ func ConvertOpenAIResponsesStreamToAnthropic(ctx context.Context, r io.Reader, w
 			// 工具调用参数完成
 			var obj map[string]any
 			if json.Unmarshal([]byte(dataStr), &obj) == nil {
-				outputIdx := int(getFloat(obj, "output_index", 0))
-				if anthropicIdx, exists := blockIndexMap[outputIdx]; exists {
-					// 发送完整的 input_json delta
-					fullInput := "{" + toolInputBuffer.String() + "}"
+				startMessage(obj)
+				outputIdx := getEventOutputIndex(obj)
+				if name, _ := obj["name"].(string); strings.TrimSpace(name) != "" {
+					toolNameByOutput[outputIdx] = strings.TrimSpace(name)
+				}
+				blockIdx := ensureToolBlock(outputIdx, toolUseIDByOutput[outputIdx], toolNameByOutput[outputIdx])
+				fullInput, _ := obj["arguments"].(string)
+				if fullInput == "" {
+					if buf := toolInputByOutput[outputIdx]; buf != nil {
+						fullInput = buf.String()
+					}
+				}
+				if fullInput != "" {
 					writeAnthropicSSE(w, "content_block_delta", map[string]any{
 						"type":  "content_block_delta",
-						"index": anthropicIdx,
+						"index": blockIdx,
 						"delta": map[string]any{
-							"type":       "input_json_delta",
+							"type":         "input_json_delta",
 							"partial_json": fullInput,
 						},
 					})
@@ -398,26 +430,14 @@ func ConvertOpenAIResponsesStreamToAnthropic(ctx context.Context, r io.Reader, w
 			// 输出项完成
 			var obj map[string]any
 			if json.Unmarshal([]byte(dataStr), &obj) == nil {
-				outputIdx := int(getFloat(obj, "output_index", 0))
-				if anthropicIdx, exists := blockIndexMap[outputIdx]; exists {
-					writeAnthropicSSE(w, "content_block_stop", map[string]any{
-						"type":  "content_block_stop",
-						"index": anthropicIdx,
-					})
-				}
+				closeBlock(getEventOutputIndex(obj))
 			}
 
 		case "response.output_text.done", "output_stop":
 			// 旧版输出完成事件
 			var obj map[string]any
 			if json.Unmarshal([]byte(dataStr), &obj) == nil {
-				outputIdx := int(getFloat(obj, "output_index", 0))
-				if anthropicIdx, exists := blockIndexMap[outputIdx]; exists {
-					writeAnthropicSSE(w, "content_block_stop", map[string]any{
-						"type":  "content_block_stop",
-						"index": anthropicIdx,
-					})
-				}
+				closeBlock(getEventOutputIndex(obj))
 			}
 
 		case "response.completed", "response.done", "response_stop":
@@ -433,9 +453,11 @@ func ConvertOpenAIResponsesStreamToAnthropic(ctx context.Context, r io.Reader, w
 					}
 				}
 			}
-			// 如果是 response.completed，推断为 tool_use
-			if eventType == "response.completed" && stopReason == "" {
-				stopReason = "tool_calls"
+			if stopReason == "" {
+				stopReason = "completed"
+			}
+			for outputIdx := range blockIndexMap {
+				closeBlock(outputIdx)
 			}
 
 			writeAnthropicSSE(w, "message_delta", map[string]any{
@@ -448,6 +470,19 @@ func ConvertOpenAIResponsesStreamToAnthropic(ctx context.Context, r io.Reader, w
 			// 空行
 		}
 	}
+}
+
+func getEventOutputIndex(m map[string]any) int {
+	if m == nil {
+		return 0
+	}
+	if v, ok := m["output_index"].(float64); ok {
+		return int(v)
+	}
+	if v, ok := m["index"].(float64); ok {
+		return int(v)
+	}
+	return int(getFloat(m, "output_index", 0))
 }
 
 func getStr(m map[string]any, key, def string) string {
@@ -669,7 +704,7 @@ func ConvertAnthropicMessageToOpenAIResponses(body []byte) ([]byte, error) {
 			text, _ := blk["text"].(string)
 			outputContent = append(outputContent, map[string]any{
 				"type":        "output_text",
-				"text":       text,
+				"text":        text,
 				"annotations": []any{},
 			})
 		}
@@ -708,7 +743,7 @@ func ConvertAnthropicMessageToOpenAIResponses(body []byte) ([]byte, error) {
 		"output": []map[string]any{
 			{
 				"type":    "message",
-				"role":   role,
+				"role":    role,
 				"content": outputContent,
 			},
 		},
@@ -800,12 +835,12 @@ func ConvertAnthropicJSONToStream(ctx context.Context, body []byte, w io.Writer)
 	writeAnthropicSSE(w, "message_start", map[string]any{
 		"type": "message_start",
 		"message": map[string]any{
-			"id":           resp["id"],
-			"type":         "message",
-			"role":         resp["role"],
-			"content":      []any{},
-			"model":        resp["model"],
-			"stop_reason":  nil,
+			"id":            resp["id"],
+			"type":          "message",
+			"role":          resp["role"],
+			"content":       []any{},
+			"model":         resp["model"],
+			"stop_reason":   nil,
 			"stop_sequence": nil,
 			"usage": map[string]any{
 				"input_tokens":  0,

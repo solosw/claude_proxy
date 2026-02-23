@@ -1,108 +1,80 @@
 # ClaudeRouter
 
-[![](https://img.shields.io/badge/CI-unknown-lightgrey)](PLACEHOLDER_CI_URL) [![](https://img.shields.io/badge/coverage-unknown-lightgrey)](PLACEHOLDER_COVERAGE_URL) [![](https://img.shields.io/badge/release-unknown-lightgrey)](PLACEHOLDER_RELEASE_URL)
+ClaudeRouter 是一个用 Go 实现的多模型网关，统一对外提供兼容 Anthropic Messages API 和 OpenAI Chat Completions API 的入口，并附带一个 Vue 3 管理后台用于维护模型、组合模型与运营商策略。
 
-ClaudeRouter 是一个用 Go 编写的轻量级模型中转站，提供兼容 Anthropic `/v1/messages` 与 OpenAI Chat Completions 的统一后端；前端提供可视化模型、运营商与组合模型管理与测试界面，便于将多个第三方大模型服务（如 Minimax、Kimi、NewAPI、iFlow 等）统一接入并对外暴露统一 API。
+## 核心能力
 
-一句话简介：统一多厂商大模型接入与路由，支持组合模型与可视化管理。
+- 统一入口：
+  - `POST /back/v1/messages`（Anthropic 风格）
+  - `POST /back/v1/chat/completions`（OpenAI 风格）
+- 支持多种上游接口类型：
+  - `anthropic`
+  - `openai`
+  - `openai_compatible`
+  - `openai_responses`
+- 模型管理：
+  - 模型 CRUD（数据库持久化）
+  - 按模型配置 API Key、Base URL、QPS、扩展字段转发策略
+- 组合模型（Combo）：
+  - 对外暴露一个虚拟模型 ID
+  - 根据关键词规则选择具体子模型
+  - 对话级模型缓存（按 `metadata.user_id`）
+- 运营商策略（Operator）：
+  - Minimax/GLM/Kimi/Proxy 直通策略
+  - iFlow / NewAPI / Codex 专用转发策略
+- 流式支持：
+  - SSE 代理
+  - Anthropic/OpenAI/OpenAI Responses 的格式转换
+- 可视化后台：
+  - 登录、模型管理、组合模型管理、运营商查看、接口测试
 
-## 功能亮点
+## 目录结构
 
-- 兼容 Anthropic `/v1/messages` 与 OpenAI Chat Completions 接口；方便与 Claude Code / Claude Desktop 及通用客户端对接
-- 可视化前端管理（Vue 3 + Element Plus）：模型、运营商、组合模型的 CRUD 与测试面板
-- 多运营商协议适配：在 `internal/translator/messages` 实现对不同服务商（Minimax、Kimi、NewAPI、iFlow 等）的请求/响应转换
-- 单一二进制部署：借助 `go:embed` 将前端静态资源打包进后端，可直接发布单个可执行文件
-- 支持组合模型（将多个底层模型组合成对外单一模型）与基于关键字的路由触发
+```text
+cmd/
+  server/main.go          # 服务入口（API + 静态资源 + WebView2）
+  gui/main.go             # 备用 GUI 启动方式（lorca）
+configs/
+  config.yaml             # 主配置文件
+internal/
+  config/                 # 配置加载
+  handler/                # HTTP 处理器与路由
+  middleware/             # API Key 鉴权
+  model/                  # GORM 模型与存储逻辑
+  storage/                # DB 初始化（SQLite）
+  combo/                  # 组合模型路由选择逻辑
+  provider/               # OpenAI/Anthropic provider 封装
+  translator/             # 协议转换（messages/request/response）
+front/                    # Vue 3 前端源码
+public/web/               # 前端构建产物（供后端静态托管）
+```
 
-## 目录结构（简要）
+## 技术栈
 
-- `cmd/server/main.go`：后端入口，加载配置、初始化 DB、注册路由并启动服务
-- `configs/config.yaml`：服务配置（监听地址、数据库、全局 API Key、运营商配置等）
-- `internal/`：主要后端实现
-  - `config`：配置加载逻辑
-  - `handler`：HTTP Handler（聊天、模型、组合模型、运营商、测试端点）
-  - `middleware`：鉴权等中间件
-  - `model`：数据库实体定义
-  - `storage`：数据库初始化与迁移
-  - `translator/messages`：运营商协议适配
-  - `provider`：下游模型服务调用封装
-- `pkg/utils`：通用工具（日志、SSE 等）
-- `front/`：前端源码（Vue 3 + Vite）
-- `public/web`：构建后静态资源（用于 go:embed）
+- 后端：Go、Gin、GORM、SQLite
+- 前端：Vue 3、Vite、Element Plus、Axios
+- 协议 SDK：
+  - `github.com/anthropics/anthropic-sdk-go`
+  - `github.com/sashabaranov/go-openai`
+  - `github.com/openai/openai-go/v3`
 
-## 环境要求
+## 快速开始
+
+### 1) 环境要求
 
 - Go 1.21+
-- Node.js 18+（仅在修改/构建前端时需要）
+- Node.js 18+（仅前端开发或重建前端时需要）
 
-## 快速开始（开发）
+### 2) 配置
 
-1. 安装后端依赖
-
-```bash
-go mod tidy
-```
-
-2. 编辑配置
-
-请参考 `configs/config.yaml`，常见配置项：
-
-- `server.addr`：监听地址（例如 `"localhost:8090"`）
-- `database.dsn`：默认使用 SQLite，路径如 `./data/claude_router.db`
-- `auth.api_key`：全局 API Key，用于前端登录与外部调用
-- `operators.*`：各运营商的 `base_url` / `api_key` / `type` 等
-
-3. 运行后端
-
-```bash
-go run ./cmd/server
-```
-
-默认服务地址： http://localhost:8090
-
-可访问：
-- 前端管理界面（嵌入的静态资源）
-- 后端统一 API（所有内部路由以 `/back` 为前缀）
-- 健康检查：`/healthz`
-
-### 前端开发（可选）
-
-进入前端目录并安装依赖：
-
-```bash
-cd front
-npm install
-```
-
-本地开发：
-
-```bash
-npm run dev
-```
-
-构建前端并将构建产物放到 `public/web`（或由 CI/构建脚本复制）：
-
-```bash
-npm run build
-# 拷贝 front/dist/* 到 public/web/
-```
-
-重新编译后端以将新前端通过 go:embed 打包：
-
-```bash
-go build -o claude-router ./cmd/server
-```
-
-## 配置示例（configs/config.yaml 节选）
-
-下面为示例片段，实际请以 `configs/config.yaml` 为准：
+编辑 `configs/config.yaml`：
 
 ```yaml
 server:
   addr: "localhost:8090"
 
 database:
-  driver: "sqlite"
+  driver: sqlite
   dsn: "./data/claude_router.db"
 
 auth:
@@ -111,124 +83,167 @@ auth:
 operators:
   minimax:
     enabled: true
-    type: "minimax"
-    base_url: "https://api.minimax.example"
-    api_key: "MINIMAX_KEY"
+    base_url: ""
+    api_key: ""
+    interface_type: "anthropic"
 ```
 
-或以环境变量覆盖（示例 `.env`）：
+### 3) 启动后端
 
-```env
-SERVER_ADDR=localhost:8090
-DATABASE_DSN=./data/claude_router.db
-AUTH_API_KEY=your-global-api-key
+```bash
+go run ./cmd/server
 ```
 
-## 使用示例（兼容 Anthropic / OpenAI）
+默认监听 `http://localhost:8090`。
 
-使用 curl 调用后端示例（Anthropic / OpenAI 风格）：
+可访问：
 
-Anthropic 风格示例：
+- 管理后台：`/`
+- 健康检查：`/healthz`
+- API 前缀：`/back`
+
+## API 概览
+
+### 鉴权
+
+受保护接口默认使用全局 API Key，支持以下 Header：
+
+- `Authorization: Bearer <API_KEY>`
+- `X-API-Key: <API_KEY>`
+- `token: <API_KEY>`
+
+### 核心接口
+
+- Anthropic 兼容：
+  - `POST /back/v1/messages`
+  - `POST /back/v1/messages/count_tokens`（当前为占位实现）
+- OpenAI 兼容：
+  - `POST /back/v1/chat/completions`
+- 管理接口：
+  - `GET/POST/PUT/DELETE /back/api/models`
+  - `GET/POST/PUT/DELETE /back/api/combos`
+  - `GET /back/api/operators`
+  - `GET /back/api/operators/:id`
+  - `POST /back/api/chat/test`
+
+### 调用示例
+
+Anthropic 风格：
 
 ```bash
 curl -X POST "http://localhost:8090/back/v1/messages" \
   -H "Authorization: Bearer your-global-api-key" \
   -H "Content-Type: application/json" \
-  -d '{"model": "your_combined_model", "messages": [{"role":"user","content":"Hello"}]}'
+  -d '{
+    "model": "your-combo-or-model-id",
+    "messages": [{"role":"user","content":"Hello"}],
+    "stream": false
+  }'
 ```
 
-OpenAI Chat Completions 风格示例（若服务暴露兼容接口）：
+OpenAI 风格：
 
 ```bash
 curl -X POST "http://localhost:8090/back/v1/chat/completions" \
   -H "Authorization: Bearer your-global-api-key" \
   -H "Content-Type: application/json" \
-  -d '{"model":"gpt-style-model","messages":[{"role":"user","content":"Say hi"}]}'
+  -d '{
+    "model":"your-model-id",
+    "messages":[{"role":"user","content":"Say hi"}],
+    "stream": false
+  }'
 ```
 
-请参考 `internal/translator/messages` 中对不同运营商的适配逻辑，以查看支持的参数与能力差异。
+## 模型与路由机制
 
-## 开发与测试
+### 模型字段（关键）
 
-- 后端本地运行：`go run ./cmd/server`
-- 构建可执行文件：`go build -o claude-router ./cmd/server`
-- 前端开发：在 `front/` 目录执行 `npm run dev`
-- 运行单元测试（后端）：
+- `id`：本地模型 ID（请求里填写）
+- `upstream_id`：真实上游模型名
+- `interface_type`：上游协议类型
+- `api_key` / `base_url`：模型级上游连接配置
+- `operator_id`：绑定运营商策略（可选）
+- `forward_metadata` / `forward_thinking`：扩展字段转发开关
+- `max_qps`：模型级限流
+- `response_format`：响应格式（默认 Anthropic，可选 `openai_responses`）
+
+### 组合模型（Combo）
+
+- 首次请求：`model` 必须是 combo ID
+- 系统根据关键词从子模型中选择目标模型
+- 若请求带 `metadata.user_id`，后续同一会话复用同一目标模型（TTL 10 分钟）
+
+## 前端开发
+
+```bash
+cd front
+npm install
+npm run dev
+```
+
+Vite 默认端口 `1111`，并代理 `/back` 到 `http://localhost:8090`。
+
+如需更新内置静态资源：
+
+```bash
+cd front
+npm run build
+```
+
+将 `front/dist` 内容同步到 `public/web/` 后重新编译后端。
+
+## 数据库
+
+- 默认 SQLite：`./data/claude_router.db`
+- 启动时自动迁移：
+  - `model.Model`
+  - `model.Combo`
+  - `model.ComboItem`
+
+## 常见问题
+
+- 打开首页空白或 404：
+  - 检查 `public/web/index.html` 是否存在
+  - 检查是否已完成前端构建并同步到 `public/web`
+- `/back` 接口 401：
+  - 检查请求头是否带正确 API Key
+- 上游 4xx/5xx：
+  - 检查模型的 `api_key/base_url/upstream_id/interface_type` 配置
+  - 检查运营商配置是否启用、是否有有效密钥
+
+## 开发建议
+
+- 运行测试：
 
 ```bash
 go test ./... -v
 ```
 
-- 代码格式化与静态检查：
+- 基础检查：
 
 ```bash
 go fmt ./...
 go vet ./...
-# 若使用 golangci-lint：
-# golangci-lint run
 ```
 
-## 部署建议
+## 说明
 
-1. 单二进制部署（推荐小规模部署）：
-   - 将 `claude-router` 可执行文件、`configs/config.yaml` 与数据库文件（如使用 SQLite）一并部署到目标机器
-2. Docker 部署（示例 Dockerfile）：
+- 当前仓库里还包含 `docs/CODEX_OPERATOR.md` 与 `examples/config-codex.yaml`，用于 Codex 运营商的扩展配置参考。
+- 现有 `go.mod` 模块名是 `awesomeProject`，如要对外发布建议统一模块名与项目名。
 
-```dockerfile
-FROM golang:1.21-alpine AS build
-WORKDIR /src
-COPY . .
-RUN go build -o /out/claude-router ./cmd/server
+## /v1/responses 适配器说明（新增）
 
-FROM alpine:3.18
-COPY --from=build /out/claude-router /usr/local/bin/claude-router
-COPY configs/config.yaml /etc/claude-router/config.yaml
-EXPOSE 8090
-ENTRYPOINT ["/usr/local/bin/claude-router", "-config", "/etc/claude-router/config.yaml"]
-```
+`POST /back/v1/responses`（以及无 `/back` 前缀的 `POST /v1/responses`）现在支持以下模型类型：
 
-3. 需注意：
-   - 若使用 SQLite，注意数据卷挂载与文件权限；生产环境建议使用 MySQL/Postgres 并在 `configs/config.yaml` 中调整 DSN 与驱动（参见 `internal/storage/db.go`）
-   - 结合负载均衡器与反向代理时，请确保 `/` 路径不会被循环代理回自身（避免重定向循环）
+- `operator_id=codex`
+- `interface_type=openai_responses` / `openai_response`
+- `interface_type=openai` / `openai_compatible`
 
-## 贡献指南
+当选择 `openai` 或 `openai_compatible` 模型时，网关会在**不改变上游路径**（仍请求 `/v1/responses`）的前提下，自动做请求体适配：
 
-欢迎贡献！基本流程：
+- `max_tokens` 自动映射为 `max_output_tokens`（当后者缺失时）
+- 若没有 `input` 但有 `messages`，自动转换为 Responses 风格 `input`
+- `tools` 同时兼容 chat 风格与 anthropic 风格，统一成 Responses function tool 结构
+- `tool_choice` 兼容 chat 风格 `function.name` 写法
 
-1. Fork 仓库并创建 feature 分支：`git checkout -b feat/short-description`
-2. 提交时请保持 commit 信息清晰：描述为什么修改，以及修复/新增的要点
-3. 发起 PR；PR 描述请包含复现步骤、测试情况与变更影响
-4. CI 检查通过后会进行代码审阅与合并
-
-代码风格：遵循 Go 的惯例（`gofmt`、简短清晰函数、错误处理明确），前端遵循项目现有风格（Vue 3 + ESLint / Prettier，如启用）。
-
-## API 文档与扩展
-
-- 运营商适配与能力说明：查看 `internal/translator/messages` 下的实现和注释
-- 若要新增运营商，需实现对应的协议转换与 provider 调用封装
-
-## 已知问题与常见问题
-
-- 访问 `http://localhost:8090/` 出现“重定向次数过多”：
-  - 检查是否有二次反向代理或浏览器缓存导致循环重定向；确保嵌入的前端静态资源正确存在于 `public/web`。
-
-- 前端页面出现空白或 404：
-  - 检查 `public/web/index.html` 是否存在；若重新构建前端，确保已将 `front/dist` 的产物复制到 `public/web` 并重新编译后端。
-
-## 许可证
-
-请在此处填写项目许可证（例如 MIT / Apache-2.0 等）。
-
-## 联系方式 / 支持
-
-- 反馈与问题：请在仓库 Issues 中创建 issue
-- 邮件联系：your-email@example.com (可选)
-
----
-
-若需把 README 改为英文版或添加 Badge URL、示例凭证/更多部署方案，请告诉浮浮酱说明。我已把 README 写入到项目文件中，接下来您希望我：
-
-1) 仅保留当前本次变更（不创建 git commit）；
-2) 或写入并创建一个 git commit（我会在执行前再次征求运行 bash 的许可）？
-
-（浮浮酱已完成写入工作喵～ o(*￣︶￣*)o）
+该适配仅用于请求体归一化，不会回退到 `/v1/chat/completions`。

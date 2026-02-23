@@ -291,9 +291,23 @@ func (a *OpenAIResponsesAdapter) executeStream(ctx context.Context, client *open
 				eventData["status"] = event.Response.Status
 			case "response.output_text.delta":
 				eventData["delta"] = event.Delta
-				eventData["index"] = event.OutputIndex
+				eventData["output_index"] = event.OutputIndex
+				eventData["index"] = event.OutputIndex // backward compatibility for old parser
 			case "response.output_text.done":
-				eventData["index"] = event.OutputIndex
+				eventData["output_index"] = event.OutputIndex
+				eventData["index"] = event.OutputIndex // backward compatibility for old parser
+			case "response.function_call_arguments.delta":
+				eventData["delta"] = event.Delta
+				eventData["output_index"] = event.OutputIndex
+				eventData["item_id"] = event.ItemID
+			case "response.function_call_arguments.done":
+				eventData["arguments"] = event.Arguments
+				eventData["name"] = event.Name
+				eventData["output_index"] = event.OutputIndex
+				eventData["item_id"] = event.ItemID
+			case "response.output_item.added", "response.output_item.done":
+				eventData["output_index"] = event.OutputIndex
+				eventData["item"] = event.Item
 			case "response.done":
 				eventData["id"] = event.Response.ID
 				eventData["status"] = event.Response.Status
