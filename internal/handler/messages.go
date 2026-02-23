@@ -365,7 +365,11 @@ func (h *MessagesHandler) handleMessages(c *gin.Context) {
 			anthropicError(c, http.StatusBadRequest, "invalid_request_error", "Operator strategy not registered: "+operatorID)
 			return
 		}
-		utils.Logger.Printf("[ClaudeRouter] messages: step=execute_call operator=%s", operatorID)
+		if strings.EqualFold(operatorID, "codex") {
+			utils.Logger.Printf("[ClaudeRouter] messages: step=execute_call operator=%s mode=sdk_translator_claude_to_codex", operatorID)
+		} else {
+			utils.Logger.Printf("[ClaudeRouter] messages: step=execute_call operator=%s", operatorID)
+		}
 		statusCode, contentType, body, streamBody, err = strategy.Execute(c.Request.Context(), payloadToSend, opts)
 	} else {
 		adapter := messages.Registry.GetOrDefault(interfaceType)
@@ -374,7 +378,11 @@ func (h *MessagesHandler) handleMessages(c *gin.Context) {
 			anthropicError(c, http.StatusBadRequest, "invalid_request_error", "Unsupported interface_type: "+interfaceType)
 			return
 		}
-		utils.Logger.Printf("[ClaudeRouter] messages: step=execute_call adapter=%s upstream_model=%s", interfaceType, upstreamID)
+		if strings.EqualFold(interfaceType, "openai_compatible") {
+			utils.Logger.Printf("[ClaudeRouter] messages: step=execute_call adapter=%s mode=sdk_translator_claude_to_openai upstream_model=%s", interfaceType, upstreamID)
+		} else {
+			utils.Logger.Printf("[ClaudeRouter] messages: step=execute_call adapter=%s upstream_model=%s", interfaceType, upstreamID)
+		}
 		statusCode, contentType, body, streamBody, err = adapter.Execute(c.Request.Context(), payloadToSend, opts)
 	}
 	utils.Logger.Printf("[ClaudeRouter] messages: step=execute_done status=%d contentType=%s bodyLen=%d streamBody=%v err=%v", statusCode, contentType, len(body), streamBody != nil, err)

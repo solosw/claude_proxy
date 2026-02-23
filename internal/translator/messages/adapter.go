@@ -46,7 +46,7 @@ func NewRegistryMap() *RegistryMap {
 	}
 	r.Register("anthropic", &AnthropicAdapter{})
 	r.Register("openai", &OpenAIAdapter{})
-	r.Register("openai_compatible", &OpenAIAdapter{})
+	r.Register("openai_compatible", &OpenAICompatibleSDKAdapter{})
 	return r
 }
 

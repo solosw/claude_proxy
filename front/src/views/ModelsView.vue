@@ -420,10 +420,10 @@ onMounted(() => {
             placeholder="选择接口类型"
             style="width: 100%;"
           >
-            <el-option label="OpenAI Chat Completions" value="openai" />
-            <el-option label="OpenAI 兼容" value="openai_compatible" />
-            <el-option label="OpenAI Responses API" value="openai_responses" />
-            <el-option label="Anthropic Messages" value="anthropic" />
+            <el-option label="openai" value="openai" />
+            <el-option label="openai_compatible" value="openai_compatible" />
+            <el-option label="openai_responses(codex)" value="openai_responses" />
+            <el-option label="anthropic(claude)" value="anthropic" />
           </el-select>
           <div v-if="form.operator_id" class="form-hint">归属运营商时可由运营商配置覆盖</div>
         </el-form-item>
