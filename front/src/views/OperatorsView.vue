@@ -92,4 +92,8 @@ onMounted(loadOperators);
     transform: translateY(0);
   }
 }
+
+.el-table :deep(.el-table__header th .cell) {
+  color: #303133;
+}
 </style>

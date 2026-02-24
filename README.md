@@ -1,16 +1,28 @@
 ﻿# ClaudeRouter
 
 ClaudeRouter 是一个多模型反代网关。
-它把不同上游协议（Anthropic(claude) / OpenAI Chat / OpenAI Responses （Codex））统一到本地接口，重点解决“同一客户端如何切换不同反代源”。
+它把不同上游协议（Anthropic(claude) / OpenAI Chat / OpenAI Responses （Codex））统一到本地接口，重点解决"同一客户端如何切换不同反代源"。
+
+## 核心特性
+
+- **模型组合（Combo）**：根据关键词自动筛选最合适的模型
+- **智能降级**：模型被禁用时自动选择其他可用模型，避免服务中断
+- **临时禁用机制**：上游模型报错时自动临时禁用（TTL 15分钟），防止重复错误
+- **协议转换**：支持 claude->OpenAI Chat/OpenAI Responses（Codex）/Anthropic(claude)
+- **会话缓存**：同一对话自动复用已选模型（TTL 10分钟）
+- **错误检测增强**：智能检测响应体中的错误信息，即使 HTTP 状态码为 200 也能识别错误
 
 ## 目前支持
 - 模型组合，根据关键词自动筛选模型
 - 支持claude->OpenAI Chat/OpenAI Responses （Codex）/Anthropic(claude)
 - 支持 codex->OpenAI Responses （Codex）
+- 智能降级与错误恢复
+- Combo 模型自动过滤被禁用的模型
+
 ## todo
-- 智能切换
-- 限流
+- 限流优化
 - codex->（Anthropic(claude)/OpenAI Chat
+
 ## 反代支持矩阵（重点）
 
 ### 1) 按 `interface_type` 反代（无 `operator_id` 时生效）
@@ -31,7 +43,7 @@ ClaudeRouter 是一个多模型反代网关。
 | operator_id | 主要用途 | 上游目标 | 特点 |
 |---|---|---|---|
 | `codex` | Codex / Responses 线路 | `.../v1/responses` | `messages` 路径走 SDK translator（Claude <-> Codex）；`responses` 路径支持直通与适配 |
-| `minimax` / `glm` / `kimi` / `proxy` | Anthropic 风格反代 | `.../v1/messages` | HTTP 直通，替换模型与鉴权 |
+| `minimax` / `glm` / `kimi` / `proxy` | Anthropic 风格反代 | `.../v1/messages` | HTTP 直通，替换模型与鉴权，支持响应体错误检测 |
 | `iflow` | iFlow 网关 | `.../v1/chat/completions` | 复用 `openai_compatible` 适配流程，默认 `https://apis.iflow.cn` |
 | `newapi` | NewAPI 网关 | `.../v1/chat/completions` | 使用 NewAPI 专用适配器 |
 
@@ -41,14 +53,35 @@ ClaudeRouter 是一个多模型反代网关。
 
 1. 先解析 `model`（支持 Combo）。
 2. 若带 `metadata.user_id`，命中会话缓存后复用已选模型（TTL 10 分钟）。
-3. 若目标模型配置了 `operator_id`，走运营商策略。
-4. 否则按 `interface_type` 走协议适配器。
+3. **Combo 智能过滤**：自动过滤掉被禁用（`enabled=false`）和临时禁用的模型。
+4. 若目标模型配置了 `operator_id`，走运营商策略。
+5. 否则按 `interface_type` 走协议适配器。
 
 ### `/back/v1/responses`
 
 1. 先解析 `model`（同样支持 Combo + 会话缓存）。
-2. 若模型是 `operator_id=codex` 或 `interface_type=openai_responses/openai_response`，走 Responses 直通路径。
-3. 若模型是 `interface_type=openai/openai_compatible`，先做 Responses <-> Chat 适配，再请求 `.../v1/chat/completions`。
+2. **Combo 智能过滤**：自动过滤掉被禁用和临时禁用的模型。
+3. 若模型是 `operator_id=codex` 或 `interface_type=openai_responses/openai_response`，走 Responses 直通路径。
+4. 若模型是 `interface_type=openai/openai_compatible`，先做 Responses <-> Chat 适配，再请求 `.../v1/chat/completions`。
+5. **直接模型降级**：若请求的模型被禁用，自动尝试选择回退模型。
+
+## 智能降级机制
+
+### 临时禁用触发条件
+
+模型会在以下情况被临时禁用 15 分钟：
+
+1. 上游返回错误状态码（4xx/5xx）
+2. 网络传输错误
+3. **响应体包含错误信息**（即使状态码为 200）
+   - 检测 `error` 字段存在
+   - 检测 `type` 字段为 `"error"`
+
+### 降级策略
+
+- **Combo 模型**：自动过滤掉被禁用的模型，从剩余可用模型中选择
+- **直接模型**（codex_proxy）：尝试选择回退模型，优先匹配 `upstream_id`
+- **会话缓存清除**：模型报错时自动清除会话缓存，下次请求重新选择
 
 ## 对外接口
 
@@ -160,6 +193,9 @@ curl -X POST "http://localhost:8090/back/v1/responses" \
   - 建议优先使用 `openai_compatible`（SDK translator 路径）。
 - 同会话模型未切换
   - 检查是否传了 `metadata.user_id`；命中会话缓存会复用模型。
+- 模型被临时禁用
+  - 模型报错后会被临时禁用 15 分钟，期间会自动选择其他可用模型。
+  - 查看日志中的 `model_disable` 和 `step=disable_passthrough_model` 信息。
 
 ## 开发与排查
 
@@ -171,6 +207,8 @@ go vet ./...
 重点日志前缀：
 - `messages: step=execute_call ...`
 - `responses: step=...`
+- `model_disable: model=... disabled_until=...`
+- `operator minimax: response contains error field`
 
 可用于确认当前请求命中了哪条反代链路（operator / adapter / sdk translator）。
 

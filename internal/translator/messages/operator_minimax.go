@@ -77,8 +77,34 @@ func (s *MinimaxStrategy) Execute(ctx context.Context, payload map[string]any, o
 	body, err = io.ReadAll(resp.Body)
 	resp.Body.Close()
 	if err != nil {
+		logStep("operator minimax: err=read response body %v", err)
 		return statusCode, contentType, nil, nil, err
 	}
+	logStep("operator minimax: response body=%s", string(body))
+	// 检查响应体中是否包含错误信息（即使状态码是 200）
+	if len(body) > 0 {
+		var respData map[string]any
+		if json.Unmarshal(body, &respData) == nil {
+			// 检查是否有 error 字段
+			if errObj, hasError := respData["error"]; hasError && errObj != nil {
+				logStep("operator minimax: response contains error field, status=%d", statusCode)
+				// 如果状态码是 200 但包含错误，修改状态码为 500
+				if statusCode >= 200 && statusCode < 300 {
+					statusCode = http.StatusInternalServerError
+				}
+				return statusCode, contentType, body, nil, errors.New("upstream returned error in response body")
+			}
+			// 检查 type 字段是否为 "error"
+			if typeStr, ok := respData["type"].(string); ok && strings.ToLower(strings.TrimSpace(typeStr)) == "error" {
+				logStep("operator minimax: response type is error, status=%d", statusCode)
+				if statusCode >= 200 && statusCode < 300 {
+					statusCode = http.StatusInternalServerError
+				}
+				return statusCode, contentType, body, nil, errors.New("upstream returned error type in response body")
+			}
+		}
+	}
+
 	return statusCode, contentType, body, nil, nil
 }
 

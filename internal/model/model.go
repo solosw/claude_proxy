@@ -26,6 +26,10 @@ type Model struct {
 
 	// ResponseFormat 响应格式类型：anthropic（默认）、openai（OpenAI Chat Completion）、openai_responses（OpenAI Responses API）
 	ResponseFormat string `json:"response_format"`
+
+	// 输入/输出 token 单价（单位：元/千 token）
+	InputPrice  float64 `json:"input_price" gorm:"not null;default:0"`
+	OutputPrice float64 `json:"output_price" gorm:"not null;default:0"`
 }
 
 // User 平台用户。
@@ -40,4 +44,17 @@ type User struct {
 	TotalTokens  int64      `json:"total_tokens" gorm:"not null;default:0"`
 	CreatedAt    time.Time  `json:"created_at"`
 	UpdatedAt    time.Time  `json:"updated_at"`
+}
+
+// UsageLog 记录每次请求的 token 使用详情。
+type UsageLog struct {
+	ID            int64     `json:"id" gorm:"primaryKey;autoIncrement"`
+	Username      string    `json:"username" gorm:"index;size:100;not null"`
+	ModelID       string    `json:"model_id" gorm:"index;size:100;not null"`
+	InputTokens   int64     `json:"input_tokens" gorm:"not null;default:0"`
+	OutputTokens  int64     `json:"output_tokens" gorm:"not null;default:0"`
+	InputPrice    float64   `json:"input_price" gorm:"not null;default:0"`   // 输入单价（元/千 token）
+	OutputPrice   float64   `json:"output_price" gorm:"not null;default:0"`  // 输出单价（元/千 token）
+	TotalCost     float64   `json:"total_cost" gorm:"not null;default:0"`    // 总费用（元）
+	CreatedAt     time.Time `json:"created_at" gorm:"index"`
 }

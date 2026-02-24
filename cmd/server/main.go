@@ -58,7 +58,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("failed to init database: %v", err)
 	}
-	if err := db.AutoMigrate(&model.Model{}, &model.Combo{}, &model.ComboItem{}, &model.User{}); err != nil {
+	if err := db.AutoMigrate(&model.Model{}, &model.Combo{}, &model.ComboItem{}, &model.User{}, &model.UsageLog{}); err != nil {
 		log.Fatalf("failed to migrate database: %v", err)
 	}
 
@@ -72,6 +72,7 @@ func main() {
 	// 需要认证的 API 组
 	authenticated := apiRoot.Group("")
 	authenticated.Use(middleware.APIKeyAuth(cfg.Auth.APIKey))
+	authenticated.Use(middleware.ErrorHandler())
 
 	chatHandler := handler.NewChatHandler()
 	chatHandler.RegisterRoutes(authenticated)

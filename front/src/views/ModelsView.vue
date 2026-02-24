@@ -24,6 +24,8 @@ const form = reactive({
   max_qps: 0,
   operator_id: '',
   response_format: '',
+  input_price: 0,
+  output_price: 0,
 });
 
 const formRules = {
@@ -73,6 +75,8 @@ const openCreate = () => {
     max_qps: 0,
     operator_id: '',
     response_format: '',
+    input_price: 0,
+    output_price: 0,
   });
   dialogVisible.value = true;
 };
@@ -363,6 +367,16 @@ onMounted(() => {
           {{ row.max_qps > 0 ? row.max_qps : '—' }}
         </template>
       </el-table-column>
+      <el-table-column prop="input_price" label="输入价格" width="120">
+        <template #default="{ row }">
+          {{ row.input_price || '—' }}
+        </template>
+      </el-table-column>
+      <el-table-column prop="output_price" label="输出价格" width="120">
+        <template #default="{ row }">
+          {{ row.output_price || '—' }}
+        </template>
+      </el-table-column>
       <el-table-column prop="operator_id" label="运营商" width="120">
         <template #default="{ row }">
           {{ row.operator_id || '—' }}
@@ -468,6 +482,14 @@ onMounted(() => {
         <el-form-item label="最大 QPS">
           <el-input-number v-model="form.max_qps" :min="0" :max="100" :step="0.5" />
           <span class="form-hint-inline">0 表示不限制</span>
+        </el-form-item>
+        <el-form-item label="输入价格">
+          <el-input-number v-model="form.input_price" :min="0" :step="0.0001" />
+          <span class="form-hint-inline">单位：元/1K tokens</span>
+        </el-form-item>
+        <el-form-item label="输出价格">
+          <el-input-number v-model="form.output_price" :min="0" :step="0.0001" />
+          <span class="form-hint-inline">单位：元/1K tokens</span>
         </el-form-item>
         <el-form-item label="描述">
           <el-input
@@ -663,5 +685,8 @@ onMounted(() => {
     transform: translateY(0);
   }
 }
-</style>
 
+.el-table :deep(.el-table__header th .cell) {
+  color: #303133;
+}
+</style>

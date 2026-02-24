@@ -5,6 +5,7 @@ import (
 	"errors"
 	"math/big"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -51,6 +52,7 @@ func RegisterModelRoutes(r gin.IRouter, cfg *appconfig.Config) {
 	api := r.Group("/api")
 	// 注意：登录接口在 main.go 中单独注册，不需要认证
 	api.GET("/me/usage", getMyUsage)
+	api.GET("/me/usage/logs", getMyUsageLogs)
 
 	admin := api.Group("")
 	admin.Use(middleware.RequireAdmin())
@@ -151,6 +153,40 @@ func getMyUsage(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, usageRespFromUser(u))
+}
+
+func getMyUsageLogs(c *gin.Context) {
+	u := middleware.CurrentUser(c)
+	if u == nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+		return
+	}
+
+	// 获取分页参数
+	page := 1
+	pageSize := 10
+	if p := c.Query("page"); p != "" {
+		if parsed, err := strconv.Atoi(p); err == nil && parsed > 0 {
+			page = parsed
+		}
+	}
+	if ps := c.Query("page_size"); ps != "" {
+		if parsed, err := strconv.Atoi(ps); err == nil && parsed > 0 && parsed <= 100 {
+			pageSize = parsed
+		}
+	}
+
+	// 查询使用日志
+	logs, total, err := model.GetUsageLogsByUsername(u.Username, page, pageSize)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"logs":  logs,
+		"total": total,
+	})
 }
 
 func listUsers(c *gin.Context) {

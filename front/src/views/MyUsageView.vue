@@ -7,6 +7,11 @@ import { useRouter } from 'vue-router';
 const router = useRouter();
 const loading = ref(false);
 const usage = ref(null);
+const usageLogs = ref([]);
+const logsLoading = ref(false);
+const currentPage = ref(1);
+const pageSize = ref(10);
+const total = ref(0);
 
 const loadMyUsage = async () => {
   loading.value = true;
@@ -19,6 +24,30 @@ const loadMyUsage = async () => {
   } finally {
     loading.value = false;
   }
+};
+
+const loadUsageLogs = async () => {
+  logsLoading.value = true;
+  try {
+    const { data } = await axios.get('/api/me/usage/logs', {
+      params: {
+        page: currentPage.value,
+        page_size: pageSize.value,
+      },
+    });
+    usageLogs.value = data.logs || [];
+    total.value = data.total || 0;
+  } catch (_) {
+    usageLogs.value = [];
+    ElMessage.error('加载使用日志失败');
+  } finally {
+    logsLoading.value = false;
+  }
+};
+
+const handlePageChange = (page) => {
+  currentPage.value = page;
+  loadUsageLogs();
 };
 
 const handleLogout = () => {
@@ -34,7 +63,10 @@ const handleLogout = () => {
   }).catch(() => {});
 };
 
-onMounted(loadMyUsage);
+onMounted(() => {
+  loadMyUsage();
+  loadUsageLogs();
+});
 </script>
 
 <template>
@@ -51,17 +83,10 @@ onMounted(loadMyUsage);
       </div>
     </div>
 
-    <el-skeleton v-if="loading" :rows="6" animated />
+    <el-skeleton v-if="loading" :rows="4" animated />
 
     <div v-else-if="usage" class="usage-grid">
-      <div class="usage-card">
-        <div class="usage-label">输入 Token</div>
-        <div class="usage-value">{{ usage.input_tokens }}</div>
-      </div>
-      <div class="usage-card">
-        <div class="usage-label">输出 Token</div>
-        <div class="usage-value">{{ usage.output_tokens }}</div>
-      </div>
+
       <div class="usage-card">
         <div class="usage-label">总计 Token</div>
         <div class="usage-value">{{ usage.total_tokens }}</div>
@@ -77,6 +102,41 @@ onMounted(loadMyUsage);
       <div class="usage-card">
         <div class="usage-label">过期时间</div>
         <div class="usage-value usage-time">{{ usage.expire_at || '不过期' }}</div>
+      </div>
+    </div>
+
+    <div v-if="usage" class="logs-section">
+      <h3 class="logs-title">使用日志</h3>
+      <el-table
+        :data="usageLogs"
+        :loading="logsLoading"
+        stripe
+        style="width: 100%"
+        class="usage-logs-table"
+      >
+        <el-table-column prop="model_id" label="模型名"  />
+        <el-table-column prop="provider" label="供应商"  />
+        <el-table-column label="消耗总Token"  align="right">
+          <template #default="{ row }">
+            {{ (row.input_tokens || 0) + (row.output_tokens || 0) }}
+          </template>
+        </el-table-column>
+        <el-table-column prop="total_cost" label="总消耗额度"  align="right">
+          <template #default="{ row }">
+            {{ row.total_cost ? row.total_cost.toFixed(6) : '0' }}
+          </template>
+        </el-table-column>
+        <el-table-column prop="created_at" label="时间"  />
+      </el-table>
+
+      <div class="pagination-container">
+        <el-pagination
+          v-model:current-page="currentPage"
+          :page-size="pageSize"
+          :total="total"
+          layout="total, prev, pager, next, jumper"
+          @current-change="handlePageChange"
+        />
       </div>
     </div>
   </div>
@@ -150,6 +210,53 @@ onMounted(loadMyUsage);
 
 .usage-time {
   font-size: 15px;
+}
+
+.logs-section {
+  margin-top: 32px;
+  padding: 20px;
+  background: rgba(255, 255, 255, 0.6);
+  backdrop-filter: blur(10px);
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  box-shadow: 0 4px 15px rgba(102, 126, 234, 0.1);
+  animation: fadeInUp 0.6s ease-out 0.2s both;
+}
+
+.logs-title {
+  font-size: 18px;
+  font-weight: 600;
+  margin: 0 0 16px;
+  color: #111827;
+}
+
+.usage-logs-table {
+  margin-bottom: 16px;
+}
+
+.usage-logs-table :deep(.el-table__header th .cell) {
+  color: #303133;
+}
+
+.usage-logs-table :deep(.el-table__header th) {
+  background-color: rgba(102, 126, 234, 0.05);
+  font-weight: 600;
+}
+
+.usage-logs-table :deep(.el-table__body tr:hover > td) {
+  background-color: rgba(102, 126, 234, 0.08) !important;
+}
+
+.pagination-container {
+  display: flex;
+  justify-content: flex-end;
+  padding-top: 16px;
+  border-top: 1px solid rgba(0, 0, 0, 0.06);
+}
+
+.pagination-container :deep(.el-pagination) {
+  display: flex;
+  gap: 8px;
 }
 
 @keyframes fadeInUp {

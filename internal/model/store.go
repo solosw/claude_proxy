@@ -182,6 +182,67 @@ func AddUserUsage(username string, inputTokens, outputTokens int64) error {
 	}).Error
 }
 
+// RecordUsageLog 记录单次请求的 token 使用日志。
+func RecordUsageLog(username, modelID string, inputTokens, outputTokens int64, inputPrice, outputPrice float64) error {
+	if strings.TrimSpace(username) == "" || strings.TrimSpace(modelID) == "" {
+		return nil
+	}
+	if inputTokens < 0 {
+		inputTokens = 0
+	}
+	if outputTokens < 0 {
+		outputTokens = 0
+	}
+	if inputPrice < 0 {
+		inputPrice = 0
+	}
+	if outputPrice < 0 {
+		outputPrice = 0
+	}
+
+	// 计算总费用：(inputTokens / 1000) * inputPrice + (outputTokens / 1000) * outputPrice
+	totalCost := (float64(inputTokens)/1000)*inputPrice + (float64(outputTokens)/1000)*outputPrice
+
+	log := &UsageLog{
+		Username:     username,
+		ModelID:      modelID,
+		InputTokens:  inputTokens,
+		OutputTokens: outputTokens,
+		InputPrice:   inputPrice,
+		OutputPrice:  outputPrice,
+		TotalCost:    totalCost,
+		CreatedAt:    time.Now(),
+	}
+	return storage.DB.Create(log).Error
+}
+
+// GetUsageLogsByUsername 获取指定用户的使用日志（分页）
+func GetUsageLogsByUsername(username string, page, pageSize int) ([]UsageLog, int64, error) {
+	if strings.TrimSpace(username) == "" || page < 1 || pageSize < 1 {
+		return nil, 0, nil
+	}
+
+	var logs []UsageLog
+	var total int64
+
+	// 查询总数
+	if err := storage.DB.Where("username = ?", username).Model(&UsageLog{}).Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+
+	// 查询分页数据
+	offset := (page - 1) * pageSize
+	if err := storage.DB.Where("username = ?", username).
+		Order("created_at DESC").
+		Limit(pageSize).
+		Offset(offset).
+		Find(&logs).Error; err != nil {
+		return nil, 0, err
+	}
+
+	return logs, total, nil
+}
+
 // ListCombos 返回所有组合模型。
 func ListCombos() []*Combo {
 	var cs []*Combo

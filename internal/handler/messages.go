@@ -16,6 +16,7 @@ import (
 	appconfig "awesomeProject/internal/config"
 	"awesomeProject/internal/middleware"
 	"awesomeProject/internal/model"
+	"awesomeProject/internal/modelstate"
 	"awesomeProject/internal/translator/messages"
 	"awesomeProject/pkg/utils"
 )
@@ -24,9 +25,6 @@ import (
 var (
 	conversationModelMu sync.RWMutex
 	conversationModel   = make(map[string]conversationModelEntry) // metadata.user_id -> (model_id,last_seen)
-
-	temporarilyDisabledModelMu sync.RWMutex
-	temporarilyDisabledModel   = make(map[string]time.Time) // model_id -> disabled_until
 )
 
 type conversationModelEntry struct {
@@ -37,7 +35,6 @@ type conversationModelEntry struct {
 const (
 	conversationModelTTL             = 10 * time.Minute
 	conversationModelCleanupInterval = 15 * time.Minute
-	temporaryModelDisableTTL         = 15 * time.Minute
 )
 
 func init() {
@@ -55,7 +52,6 @@ func init() {
 				}
 			}
 			conversationModelMu.Unlock()
-			cleanupTemporarilyDisabledModels(now)
 		}
 	}()
 }
@@ -148,51 +144,6 @@ func anthropicErrorFromBody(c *gin.Context, statusCode int, body []byte) {
 	anthropicError(c, statusCode, errorType, message)
 }
 
-func disableModelTemporarily(modelID string, ttl time.Duration) {
-	id := strings.TrimSpace(modelID)
-	if id == "" || ttl <= 0 {
-		return
-	}
-	disabledUntil := time.Now().Add(ttl)
-	temporarilyDisabledModelMu.Lock()
-	temporarilyDisabledModel[id] = disabledUntil
-	temporarilyDisabledModelMu.Unlock()
-	utils.Logger.Printf("[ClaudeRouter] model_disable: model=%s disabled_until=%s ttl=%s", id, disabledUntil.Format(time.RFC3339), ttl)
-}
-
-func isModelTemporarilyDisabled(modelID string) bool {
-	id := strings.TrimSpace(modelID)
-	if id == "" {
-		return false
-	}
-	now := time.Now()
-	temporarilyDisabledModelMu.RLock()
-	disabledUntil, ok := temporarilyDisabledModel[id]
-	temporarilyDisabledModelMu.RUnlock()
-	if !ok {
-		return false
-	}
-	if now.Before(disabledUntil) {
-		return true
-	}
-	temporarilyDisabledModelMu.Lock()
-	if currentUntil, currentOK := temporarilyDisabledModel[id]; currentOK && !now.Before(currentUntil) {
-		delete(temporarilyDisabledModel, id)
-	}
-	temporarilyDisabledModelMu.Unlock()
-	return false
-}
-
-func cleanupTemporarilyDisabledModels(now time.Time) {
-	temporarilyDisabledModelMu.Lock()
-	for k, until := range temporarilyDisabledModel {
-		if !now.Before(until) {
-			delete(temporarilyDisabledModel, k)
-		}
-	}
-	temporarilyDisabledModelMu.Unlock()
-}
-
 func (h *MessagesHandler) handleMessages(c *gin.Context) {
 	// 每次请求打一条日志，便于确认「重启后持续请求」来自客户端自动重试（如 Claude Code/Cursor）；关闭对应对话会话即可停止重试。
 	ua := c.GetHeader("User-Agent")
@@ -266,9 +217,10 @@ func (h *MessagesHandler) handleMessages(c *gin.Context) {
 		if err != nil {
 			utils.Logger.Printf("[ClaudeRouter] messages: step=resolve_model err=cached_model_gone model=%s", requestedModel)
 			anthropicError(c, http.StatusNotFound, "not_found_error", "Unknown model: "+requestedModel)
+
 			return
 		}
-		if isModelTemporarilyDisabled(m.ID) {
+		if modelstate.IsModelTemporarilyDisabled(m.ID) {
 			utils.Logger.Printf("[ClaudeRouter] messages: step=resolve_model err=model_temp_disabled model=%s", m.ID)
 			anthropicError(c, http.StatusBadRequest, "invalid_request_error", "Model temporarily disabled: "+m.ID)
 			return
@@ -293,14 +245,31 @@ func (h *MessagesHandler) handleMessages(c *gin.Context) {
 			anthropicError(c, http.StatusBadRequest, "invalid_request_error", "Model disabled: "+requestedModel)
 			return
 		}
-		chosenID := combo.ChooseModelID(cb, inputText)
-		if chosenID == "" {
-			anthropicError(c, http.StatusBadRequest, "invalid_request_error", "Combo has no selectable items")
+
+		// 过滤掉被禁用和临时禁用的模型
+		filtered := make([]model.ComboItem, 0, len(cb.Items))
+		for _, it := range cb.Items {
+			modelID := strings.TrimSpace(it.ModelID)
+			if modelID == "" || modelstate.IsModelTemporarilyDisabled(modelID) {
+				continue
+			}
+			m, err := model.GetModel(modelID)
+			if err != nil || m == nil || !m.Enabled || modelstate.IsModelTemporarilyDisabled(m.ID) {
+				continue
+			}
+			filtered = append(filtered, it)
+		}
+		if len(filtered) == 0 {
+			utils.Logger.Printf("[ClaudeRouter] messages: step=resolve_model err=no_available_models combo=%s", requestedModel)
+			anthropicError(c, http.StatusBadRequest, "invalid_request_error", "Combo has no available models")
 			return
 		}
-		if isModelTemporarilyDisabled(chosenID) {
-			utils.Logger.Printf("[ClaudeRouter] messages: step=resolve_model err=model_temp_disabled model=%s", chosenID)
-			anthropicError(c, http.StatusBadRequest, "invalid_request_error", "Model temporarily disabled: "+chosenID)
+
+		// 使用过滤后的 combo 进行选择
+		tmp := &model.Combo{ID: cb.ID, Name: cb.Name, Description: cb.Description, Enabled: cb.Enabled, Items: filtered}
+		chosenID := combo.ChooseModelID(tmp, inputText)
+		if chosenID == "" {
+			anthropicError(c, http.StatusBadRequest, "invalid_request_error", "Combo has no selectable items")
 			return
 		}
 		m, err := model.GetModel(chosenID)
@@ -323,12 +292,12 @@ func (h *MessagesHandler) handleMessages(c *gin.Context) {
 			conversationModelMu.Unlock()
 		}
 	}
-
+	c.Set("real_model_id", targetModel.ID)
 	if !targetModel.Enabled {
 		anthropicError(c, http.StatusBadRequest, "invalid_request_error", "Model disabled: "+targetModel.ID)
 		return
 	}
-	if isModelTemporarilyDisabled(targetModel.ID) {
+	if modelstate.IsModelTemporarilyDisabled(targetModel.ID) {
 		utils.Logger.Printf("[ClaudeRouter] messages: step=resolve_model err=model_temp_disabled model=%s", targetModel.ID)
 		anthropicError(c, http.StatusBadRequest, "invalid_request_error", "Model temporarily disabled: "+targetModel.ID)
 		return
@@ -466,7 +435,7 @@ func (h *MessagesHandler) handleMessages(c *gin.Context) {
 			conversationModelMu.Unlock()
 			utils.Logger.Printf("[ClaudeRouter] messages: step=clear_cache due_to_error user_id=%s", conversationID)
 		}
-		disableModelTemporarily(targetModel.ID, temporaryModelDisableTTL)
+		modelstate.DisableModelTemporarily(targetModel.ID, 15*time.Minute)
 
 		if c.Request.Context().Err() != nil {
 			utils.Logger.Printf("[ClaudeRouter] messages: client_gone, skip error response")
@@ -498,7 +467,7 @@ func (h *MessagesHandler) handleMessages(c *gin.Context) {
 			conversationModelMu.Unlock()
 			utils.Logger.Printf("[ClaudeRouter] messages: step=clear_cache due_to_status=%d user_id=%s", statusCode, conversationID)
 		}
-		disableModelTemporarily(targetModel.ID, temporaryModelDisableTTL)
+		modelstate.DisableModelTemporarily(targetModel.ID, 15*time.Minute)
 
 		upstreamMsg := extractUpstreamErrorMessage(body)
 		utils.Logger.Printf("[ClaudeRouter] messages: step=upstream_error status=%d message=%s", statusCode, upstreamMsg)
@@ -518,7 +487,7 @@ func (h *MessagesHandler) handleMessages(c *gin.Context) {
 				messages.ConvertOpenAIResponsesStreamToAnthropic(c.Request.Context(), streamBody, pw)
 			}()
 			c.Header("Content-Type", "text/event-stream")
-			utils.ProxySSE(c, trackUsageStream(c, pr))
+			utils.ProxySSE(c, trackUsageStream(c, pr, targetModel.ID))
 			return
 		}
 		if strings.EqualFold(targetModel.ResponseFormat, "openai_responses") {
@@ -529,11 +498,11 @@ func (h *MessagesHandler) handleMessages(c *gin.Context) {
 				messages.ConvertAnthropicStreamToOpenAIResponses(c.Request.Context(), streamBody, pw)
 			}()
 			c.Header("Content-Type", "text/event-stream")
-			utils.ProxySSE(c, trackUsageStream(c, pr))
+			utils.ProxySSE(c, trackUsageStream(c, pr, targetModel.ID))
 			return
 		}
 		c.Header("Content-Type", "text/event-stream")
-		utils.ProxySSE(c, trackUsageStream(c, streamBody))
+		utils.ProxySSE(c, trackUsageStream(c, streamBody, targetModel.ID))
 		return
 	}
 
@@ -566,7 +535,7 @@ func (h *MessagesHandler) handleMessages(c *gin.Context) {
 	}
 
 	utils.Logger.Printf("[ClaudeRouter] messages: step=write_response status=%d len=%d", statusCode, len(body))
-	recordUsageFromBody(c, body)
+	recordUsageFromBodyWithModel(c, body, targetModel.ID)
 	c.Data(statusCode, ct, body)
 }
 
@@ -655,7 +624,12 @@ func recordUsageFromBody(c *gin.Context, body []byte) {
 	recordUsage(c, input, output)
 }
 
-func trackUsageStream(c *gin.Context, src io.ReadCloser) io.ReadCloser {
+func recordUsageFromBodyWithModel(c *gin.Context, body []byte, modelID string) {
+	input, output := extractUsageFromJSON(body)
+	recordUsageWithModel(c, input, output, modelID)
+}
+
+func trackUsageStream(c *gin.Context, src io.ReadCloser, modelID string) io.ReadCloser {
 	if src == nil {
 		return nil
 	}
@@ -687,7 +661,7 @@ func trackUsageStream(c *gin.Context, src io.ReadCloser) io.ReadCloser {
 		if err := scanner.Err(); err != nil {
 			return
 		}
-		recordUsage(c, inputTokens, outputTokens)
+		recordUsageWithModel(c, inputTokens, outputTokens, modelID)
 	}()
 	return pr
 }
@@ -744,16 +718,30 @@ func numToInt64(v any) int64 {
 }
 
 func recordUsage(c *gin.Context, input, output int64) {
-	if input <= 0 && output <= 0 {
-		return
-	}
+	recordUsageWithModel(c, input, output, "")
+}
+
+func recordUsageWithModel(c *gin.Context, input, output int64, modelID string) {
 	u := middleware.CurrentUser(c)
 	if u == nil || strings.TrimSpace(u.Username) == "" {
 		return
 	}
+	utils.Logger.Printf("user:%v", u.Username)
+	if input <= 0 && output <= 0 {
+		return
+	}
+
 	if err := model.AddUserUsage(u.Username, input, output); err == nil {
 		u.InputTokens += input
 		u.OutputTokens += output
 		u.TotalTokens += input + output
+	}
+
+	// 记录使用日志（包含模型单价信息）
+	if strings.TrimSpace(modelID) != "" {
+		m, err := model.GetModel(modelID)
+		if err == nil && m != nil {
+			_ = model.RecordUsageLog(u.Username, modelID, input, output, m.InputPrice, m.OutputPrice)
+		}
 	}
 }

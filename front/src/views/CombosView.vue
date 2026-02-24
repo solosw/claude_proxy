@@ -314,5 +314,8 @@ onMounted(loadData);
     transform: translateY(0);
   }
 }
-</style>
 
+.el-table :deep(.el-table__header th .cell) {
+  color: #303133;
+}
+</style>
