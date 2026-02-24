@@ -182,7 +182,7 @@ func (h *CodexProxyHandler) handleResponses(c *gin.Context) {
 		if streamBody != nil && statusCode >= 200 && statusCode < 300 {
 			utils.Logger.Printf("[ClaudeRouter] responses: step=proxy_stream mode=sdk_openai_compatible status=%d", statusCode)
 			c.Header("Content-Type", "text/event-stream")
-			utils.ProxySSE(c, streamBody)
+			utils.ProxySSE(c, trackUsageStream(c, streamBody))
 			return
 		}
 
@@ -192,6 +192,9 @@ func (h *CodexProxyHandler) handleResponses(c *gin.Context) {
 				delete(codexConversationModel, conversationID)
 				codexConversationModelMu.Unlock()
 				utils.Logger.Printf("[ClaudeRouter] responses: step=clear_cache reason=upstream_status status=%d", statusCode)
+			}
+			if targetModel != nil {
+				disableModelTemporarily(targetModel.ID, temporaryModelDisableTTL)
 			}
 			utils.Logger.Printf("[ClaudeRouter] responses: step=upstream_error status=%d content_type=%s body_preview=%s",
 				statusCode, contentType, debugBodySnippet(body, 600))
@@ -248,6 +251,9 @@ func (h *CodexProxyHandler) handleResponses(c *gin.Context) {
 			codexConversationModelMu.Unlock()
 			utils.Logger.Printf("[ClaudeRouter] responses: step=clear_cache reason=upstream_transport_error")
 		}
+		if targetModel != nil {
+			disableModelTemporarily(targetModel.ID, temporaryModelDisableTTL)
+		}
 		if lastErr != nil {
 			utils.Logger.Printf("[ClaudeRouter] responses: step=upstream_failed err=%v", lastErr)
 			c.JSON(http.StatusBadGateway, gin.H{"error": lastErr.Error()})
@@ -286,6 +292,9 @@ func (h *CodexProxyHandler) handleResponses(c *gin.Context) {
 			codexConversationModelMu.Unlock()
 			utils.Logger.Printf("[ClaudeRouter] responses: step=clear_cache reason=upstream_status status=%d", resp.StatusCode)
 		}
+		if targetModel != nil {
+			disableModelTemporarily(targetModel.ID, temporaryModelDisableTTL)
+		}
 		utils.Logger.Printf("[ClaudeRouter] responses: step=upstream_error status=%d content_type=%s body_preview=%s",
 			resp.StatusCode, contentType, debugBodySnippet(body, 600))
 	} else {
@@ -306,7 +315,7 @@ func (h *CodexProxyHandler) resolveResponseTargetModel(requestedModel, conversat
 		if ent.ModelID != "" {
 			if !ent.LastSeen.IsZero() && now.Sub(ent.LastSeen) <= conversationModelTTL {
 				m, err := model.GetModel(ent.ModelID)
-				if err == nil && m.Enabled && isCodexResponsesCandidate(m) {
+				if err == nil && m.Enabled && !isModelTemporarilyDisabled(m.ID) && isCodexResponsesCandidate(m) {
 					codexConversationModelMu.Lock()
 					ent.LastSeen = now
 					codexConversationModel[conversationID] = ent
@@ -334,8 +343,12 @@ func (h *CodexProxyHandler) resolveResponseTargetModel(requestedModel, conversat
 
 			filtered := make([]model.ComboItem, 0, len(cb.Items))
 			for _, it := range cb.Items {
-				m, err := model.GetModel(strings.TrimSpace(it.ModelID))
-				if err != nil || m == nil || !m.Enabled || !isCodexResponsesCandidate(m) {
+				modelID := strings.TrimSpace(it.ModelID)
+				if modelID == "" || isModelTemporarilyDisabled(modelID) {
+					continue
+				}
+				m, err := model.GetModel(modelID)
+				if err != nil || m == nil || !m.Enabled || isModelTemporarilyDisabled(m.ID) || !isCodexResponsesCandidate(m) {
 					continue
 				}
 				filtered = append(filtered, it)
@@ -349,8 +362,11 @@ func (h *CodexProxyHandler) resolveResponseTargetModel(requestedModel, conversat
 			if strings.TrimSpace(chosenID) == "" {
 				return nil, false, errors.New("combo has no selectable items")
 			}
+			if isModelTemporarilyDisabled(chosenID) {
+				return nil, false, errors.New("model temporarily disabled: " + chosenID)
+			}
 			m, err := model.GetModel(chosenID)
-			if err != nil || m == nil || !m.Enabled || !isCodexResponsesCandidate(m) {
+			if err != nil || m == nil || !m.Enabled || isModelTemporarilyDisabled(m.ID) || !isCodexResponsesCandidate(m) {
 				return nil, false, errors.New("combo item model not found: " + chosenID)
 			}
 
@@ -389,6 +405,9 @@ func (h *CodexProxyHandler) resolveResponseTargetModel(requestedModel, conversat
 	if !m.Enabled {
 		return nil, false, errors.New("model disabled: " + m.ID)
 	}
+	if isModelTemporarilyDisabled(m.ID) {
+		return nil, false, errors.New("model temporarily disabled: " + m.ID)
+	}
 	if !isCodexResponsesCandidate(m) {
 		return nil, false, errors.New("model must be operator_id=codex or interface_type in [openai_responses, openai_response, openai, openai_compatible]")
 	}
@@ -412,7 +431,7 @@ func isCodexResponsesCandidate(m *model.Model) bool {
 func pickFallbackResponsesModel(requestedModel string) *model.Model {
 	candidates := make([]*model.Model, 0)
 	for _, m := range model.ListModels() {
-		if m == nil || !m.Enabled || !isCodexResponsesCandidate(m) {
+		if m == nil || !m.Enabled || isModelTemporarilyDisabled(m.ID) || !isCodexResponsesCandidate(m) {
 			continue
 		}
 		candidates = append(candidates, m)

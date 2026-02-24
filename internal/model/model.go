@@ -1,5 +1,7 @@
 package model
 
+import "time"
+
 // Model 表示一个可用的底层模型（OpenAI / Anthropic 等），可被直接调用或被组合模型引用。
 type Model struct {
 	ID          string `json:"id" gorm:"primaryKey"`   // 唯一 ID，例如 "openai:gpt-4.1"
@@ -26,3 +28,16 @@ type Model struct {
 	ResponseFormat string `json:"response_format"`
 }
 
+// User 平台用户。
+type User struct {
+	Username     string     `json:"username" gorm:"primaryKey;size:100"`
+	APIKey       string     `json:"api_key" gorm:"uniqueIndex;size:255;not null"`
+	Quota        int64      `json:"quota" gorm:"not null;default:-1"` // -1 表示无限
+	ExpireAt     *time.Time `json:"expire_at"`
+	IsAdmin      bool       `json:"is_admin" gorm:"not null;default:false"`
+	InputTokens  int64      `json:"input_tokens" gorm:"not null;default:0"`
+	OutputTokens int64      `json:"output_tokens" gorm:"not null;default:0"`
+	TotalTokens  int64      `json:"total_tokens" gorm:"not null;default:0"`
+	CreatedAt    time.Time  `json:"created_at"`
+	UpdatedAt    time.Time  `json:"updated_at"`
+}

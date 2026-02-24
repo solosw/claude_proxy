@@ -1,37 +1,41 @@
-import { createRouter, createWebHistory } from 'vue-router';
+import { createRouter, createWebHistory } from "vue-router";
 
-const LoginView = () => import('../views/LoginView.vue');
-const ModelsView = () => import('../views/ModelsView.vue');
-const CombosView = () => import('../views/CombosView.vue');
-const OperatorsView = () => import('../views/OperatorsView.vue');
+const LoginView = () => import("../views/LoginView.vue");
+const AdminLayout = () => import("../views/AdminLayout.vue");
+const UserLayout = () => import("../views/UserLayout.vue");
+const ModelsView = () => import("../views/ModelsView.vue");
+const CombosView = () => import("../views/CombosView.vue");
+const OperatorsView = () => import("../views/OperatorsView.vue");
+const UsersView = () => import("../views/UsersView.vue");
+const MyUsageView = () => import("../views/MyUsageView.vue");
 
 const routes = [
   {
-    path: '/',
-    redirect: '/login',
+    path: "/",
+    redirect: "/login",
   },
   {
-    path: '/login',
+    path: "/login",
     component: LoginView,
   },
   {
-    path: '/models',
-    component: ModelsView,
+    path: "/",
+    component: AdminLayout,
+    meta: { requiresAdmin: true },
+    children: [
+      { path: "models", component: ModelsView },
+      { path: "operators", component: OperatorsView },
+      { path: "combos", component: CombosView },
+      { path: "users", component: UsersView },
+      { path: "api-test", component: () => import("@/views/ApiTestView.vue") },
+    ],
   },
   {
-    path: '/operators',
-    component: OperatorsView,
+    path: "/",
+    component: UserLayout,
+    meta: { requiresUser: true },
+    children: [{ path: "my-usage", component: MyUsageView }],
   },
-  {
-    path: '/combos',
-    component: CombosView,
-  },
-  {
-    path: '/api-test',
-    name: 'ApiTest',
-    component: () => import('@/views/ApiTestView.vue')
-  }
-
 ];
 
 const router = createRouter({
@@ -39,6 +43,24 @@ const router = createRouter({
   routes,
 });
 
+// 路由守卫：根据 is_admin 跳转到对应布局
+router.beforeEach((to, from, next) => {
+  const isAdmin = localStorage.getItem("is_admin") === "1";
+  const token = localStorage.getItem("token");
+
+  // 未登录只能访问登录页
+  if (!token && to.path !== "/login") {
+    next("/login");
+    return;
+  }
+
+  // 已登录访问登录页，跳转到对应首页
+  if (to.path === "/login" && token) {
+    next(isAdmin ? "/models" : "/my-usage");
+    return;
+  }
+
+  next();
+});
+
 export default router;
-
-

@@ -1,36 +1,305 @@
 package handler
 
 import (
+	"crypto/rand"
+	"errors"
+	"math/big"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
 	appconfig "awesomeProject/internal/config"
+	"awesomeProject/internal/middleware"
 	"awesomeProject/internal/model"
 )
 
-// RegisterModelRoutes 注册模型、组合模型、运营商列表接口。运营商为系统内置，仅可读配置列表。
+const apiKeyChars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
+
+// generateAPIKey 生成32位随机API Key（字母+数字）
+func generateAPIKey() (string, error) {
+	result := make([]byte, 32)
+	for i := range result {
+		n, err := rand.Int(rand.Reader, big.NewInt(int64(len(apiKeyChars))))
+		if err != nil {
+			return "", err
+		}
+		result[i] = apiKeyChars[n.Int64()]
+	}
+	return string(result), nil
+}
+
+func generateUniqueAPIKey() (string, error) {
+	for i := 0; i < 10; i++ {
+		apiKey, err := generateAPIKey()
+		if err != nil {
+			return "", err
+		}
+		_, err = model.GetUserByAPIKey(apiKey)
+		if err == model.ErrNotFound {
+			return apiKey, nil
+		}
+		if err != nil {
+			return "", err
+		}
+	}
+	return "", errors.New("failed to generate unique api key")
+}
+
 func RegisterModelRoutes(r gin.IRouter, cfg *appconfig.Config) {
 	api := r.Group("/api")
+	// 注意：登录接口在 main.go 中单独注册，不需要认证
+	api.GET("/me/usage", getMyUsage)
 
-	// 模型 CRUD
-	api.GET("/models", listModels)
-	api.POST("/models", createModel)
-	api.GET("/models/:id", getModel)
-	api.PUT("/models/:id", updateModel)
-	api.DELETE("/models/:id", deleteModel)
+	admin := api.Group("")
+	admin.Use(middleware.RequireAdmin())
 
-	// 运营商：系统内置，仅列表与详情（来自配置，不可增删改）
-	api.GET("/operators", listOperators(cfg))
-	api.GET("/operators/:id", getOperator(cfg))
+	admin.GET("/models", listModels)
+	admin.POST("/models", createModel)
+	admin.GET("/models/:id", getModel)
+	admin.PUT("/models/:id", updateModel)
+	admin.DELETE("/models/:id", deleteModel)
 
-	// 组合模型 CRUD
-	api.GET("/combos", listCombos)
-	api.POST("/combos", createCombo)
-	api.GET("/combos/:id", getCombo)
-	api.PUT("/combos/:id", updateCombo)
-	api.DELETE("/combos/:id", deleteCombo)
+	admin.GET("/operators", listOperators(cfg))
+	admin.GET("/operators/:id", getOperator(cfg))
+
+	admin.GET("/combos", listCombos)
+	admin.POST("/combos", createCombo)
+	admin.GET("/combos/:id", getCombo)
+	admin.PUT("/combos/:id", updateCombo)
+	admin.DELETE("/combos/:id", deleteCombo)
+
+	admin.GET("/users", listUsers)
+	admin.POST("/users", createUser)
+	admin.PUT("/users/:username", updateUser)
+	admin.GET("/users/:username/usage", getUserUsage)
+}
+
+type loginRequest struct {
+	APIKey string `json:"api_key"`
+}
+
+type loginResponse struct {
+	Success  bool   `json:"success"`
+	Username string `json:"username"`
+	IsAdmin  bool   `json:"is_admin"`
+	Message  string `json:"message,omitempty"`
+}
+
+// login 返回一个登录处理器，需要 cfg 来检查管理员 API Key
+func login(cfg *appconfig.Config) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		loginHandler(c, cfg)
+	}
+}
+
+// LoginWithoutAuth 不需要认证的登录处理器（由 main.go 直接调用）
+func LoginWithoutAuth(c *gin.Context, cfg *appconfig.Config) {
+	loginHandler(c, cfg)
+}
+
+func loginHandler(c *gin.Context, cfg *appconfig.Config) {
+	var req loginRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid body"})
+		return
+	}
+
+	apiKey := strings.TrimSpace(req.APIKey)
+	if apiKey == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "api_key required"})
+		return
+	}
+
+	// 先检查是否是管理员
+	adminAPIKey := strings.TrimSpace(cfg.Auth.APIKey)
+	if adminAPIKey != "" && apiKey == adminAPIKey {
+		c.JSON(http.StatusOK, loginResponse{
+			Success:  true,
+			Username: "admin",
+			IsAdmin:  true,
+		})
+		return
+	}
+
+	// 检查用户表
+	user, err := model.GetUserByAPIKey(apiKey)
+	if err != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid api key"})
+		return
+	}
+
+	// 检查过期
+	now := time.Now()
+	if user.ExpireAt != nil && now.After(*user.ExpireAt) {
+		c.JSON(http.StatusForbidden, gin.H{"error": "api key expired"})
+		return
+	}
+
+	c.JSON(http.StatusOK, loginResponse{
+		Success:  true,
+		Username: user.Username,
+		IsAdmin:  user.IsAdmin,
+	})
+}
+
+func getMyUsage(c *gin.Context) {
+	u := middleware.CurrentUser(c)
+	if u == nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+		return
+	}
+	c.JSON(http.StatusOK, usageRespFromUser(u))
+}
+
+func listUsers(c *gin.Context) {
+	users, err := model.ListUsers()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, users)
+}
+
+type userCreateRequest struct {
+	Username string     `json:"username"`
+	Quota    int64      `json:"quota"`
+	ExpireAt *time.Time `json:"expire_at"`
+	IsAdmin  bool       `json:"is_admin"`
+}
+
+func createUser(c *gin.Context) {
+	var req userCreateRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid body"})
+		return
+	}
+
+	username := strings.TrimSpace(req.Username)
+	if username == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "username required"})
+		return
+	}
+
+	for i := 0; i < 10; i++ {
+		apiKey, err := generateUniqueAPIKey()
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to generate API key"})
+			return
+		}
+		u := &model.User{
+			Username: username,
+			APIKey:   apiKey,
+			Quota:    req.Quota,
+			ExpireAt: req.ExpireAt,
+			IsAdmin:  req.IsAdmin,
+		}
+		if err := model.CreateUser(u); err != nil {
+			if strings.Contains(strings.ToLower(err.Error()), "unique") {
+				continue
+			}
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(http.StatusCreated, u)
+		return
+	}
+
+	c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create user with unique api key"})
+}
+
+type userUpdateRequest struct {
+	APIKey   *string    `json:"api_key"`
+	Quota    *int64     `json:"quota"`
+	ExpireAt *time.Time `json:"expire_at"`
+	IsAdmin  *bool      `json:"is_admin"`
+}
+
+func updateUser(c *gin.Context) {
+	username := c.Param("username")
+	var req userUpdateRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid body"})
+		return
+	}
+	update := map[string]any{}
+	if req.APIKey != nil {
+		update["api_key"] = strings.TrimSpace(*req.APIKey)
+	}
+	if req.Quota != nil {
+		update["quota"] = *req.Quota
+	}
+	if req.IsAdmin != nil {
+		update["is_admin"] = *req.IsAdmin
+	}
+	if req.ExpireAt != nil {
+		update["expire_at"] = req.ExpireAt
+	}
+	if len(update) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "empty update"})
+		return
+	}
+	if err := model.UpdateUserByUsername(username, update); err != nil {
+		status := http.StatusBadRequest
+		if err == model.ErrNotFound {
+			status = http.StatusNotFound
+		}
+		c.JSON(status, gin.H{"error": err.Error()})
+		return
+	}
+	u, _ := model.GetUser(username)
+	c.JSON(http.StatusOK, u)
+}
+
+func getUserUsage(c *gin.Context) {
+	u, err := model.GetUser(c.Param("username"))
+	if err != nil {
+		status := http.StatusInternalServerError
+		if err == model.ErrNotFound {
+			status = http.StatusNotFound
+		}
+		c.JSON(status, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, usageRespFromUser(u))
+}
+
+type usageResponse struct {
+	Username     string     `json:"username"`
+	Quota        int64      `json:"quota"`
+	Remaining    int64      `json:"remaining"`
+	Unlimited    bool       `json:"unlimited"`
+	ExpireAt     *time.Time `json:"expire_at"`
+	InputTokens  int64      `json:"input_tokens"`
+	OutputTokens int64      `json:"output_tokens"`
+	TotalTokens  int64      `json:"total_tokens"`
+	IsAdmin      bool       `json:"is_admin"`
+}
+
+func usageRespFromUser(u *model.User) *usageResponse {
+	if u == nil {
+		return nil
+	}
+	resp := &usageResponse{
+		Username:     u.Username,
+		Quota:        u.Quota,
+		ExpireAt:     u.ExpireAt,
+		InputTokens:  u.InputTokens,
+		OutputTokens: u.OutputTokens,
+		TotalTokens:  u.TotalTokens,
+		IsAdmin:      u.IsAdmin,
+	}
+	if u.Quota < 0 {
+		resp.Unlimited = true
+		resp.Remaining = -1
+	} else {
+		resp.Remaining = u.Quota - u.TotalTokens
+		if resp.Remaining < 0 {
+			resp.Remaining = 0
+		}
+	}
+	return resp
 }
 
 func listModels(c *gin.Context) {
@@ -108,12 +377,7 @@ func listOperators(cfg *appconfig.Config) gin.HandlerFunc {
 		}
 		list := make([]*model.Operator, 0, len(cfg.Operators))
 		for id, ep := range cfg.Operators {
-			list = append(list, &model.Operator{
-				ID:          id,
-				Name:        strings.TrimSpace(ep.Name),
-				Description: strings.TrimSpace(ep.Description),
-				Enabled:     ep.Enabled,
-			})
+			list = append(list, &model.Operator{ID: id, Name: strings.TrimSpace(ep.Name), Description: strings.TrimSpace(ep.Description), Enabled: ep.Enabled})
 		}
 		c.JSON(http.StatusOK, list)
 	}
@@ -131,12 +395,7 @@ func getOperator(cfg *appconfig.Config) gin.HandlerFunc {
 			c.JSON(http.StatusNotFound, gin.H{"error": "operator not found: " + id})
 			return
 		}
-		c.JSON(http.StatusOK, &model.Operator{
-			ID:          id,
-			Name:        strings.TrimSpace(ep.Name),
-			Description: strings.TrimSpace(ep.Description),
-			Enabled:     ep.Enabled,
-		})
+		c.JSON(http.StatusOK, &model.Operator{ID: id, Name: strings.TrimSpace(ep.Name), Description: strings.TrimSpace(ep.Description), Enabled: ep.Enabled})
 	}
 }
 
@@ -206,4 +465,3 @@ func deleteCombo(c *gin.Context) {
 	}
 	c.Status(http.StatusNoContent)
 }
-

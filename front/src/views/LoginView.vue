@@ -16,17 +16,24 @@ const handleLogin = async () => {
   }
   loading.value = true;
   try {
-    // 使用用户输入的 API Key 访问一个受保护的接口来校验
-    await axios.get('/api/models', {
-      headers: {
-        'X-API-Key': apiKey.value,
-      },
+    // 调用登录接口
+    const { data } = await axios.post('/api/login', {
+      api_key: apiKey.value,
     });
-    localStorage.setItem('token', apiKey.value);
-    ElMessage.success('登录成功');
-    router.push('/models');
+
+    if (data.success) {
+      localStorage.setItem('token', apiKey.value);
+      localStorage.setItem('is_admin', data.is_admin ? '1' : '0');
+      localStorage.setItem('username', data.username || '');
+      ElMessage.success('登录成功');
+      // 跳转到对应首页
+      router.push(data.is_admin ? '/models' : '/my-usage');
+    } else {
+      ElMessage.error(data.message || '登录失败');
+    }
   } catch (e) {
-    ElMessage.error('API Key 无效或请求失败');
+    const msg = e.response?.data?.error || 'API Key 无效或请求失败';
+    ElMessage.error(msg);
   } finally {
     loading.value = false;
   }
@@ -38,7 +45,7 @@ const handleLogin = async () => {
     <div class="login-card">
       <h1 class="title">ClaudeRouter 登录</h1>
       <p class="subtitle">
-        请输入配置在后端 <code>config.yaml</code> 中的 API Key
+        请输入系统分配的 API Key
       </p>
 
       <el-form @submit.prevent="handleLogin">
@@ -64,7 +71,7 @@ const handleLogin = async () => {
       </el-form>
 
       <p class="hint">
-        后续在 Claude Code 中配置该 API Key，即可通过本中转站调用不同模型服务商。
+        管理员登录后可访问模型与用户管理，普通用户登录后可查看自己的额度与 token 使用情况。
       </p>
     </div>
   </div>
@@ -82,7 +89,6 @@ const handleLogin = async () => {
   overflow: hidden;
 }
 
-/* 背景装饰元素 */
 .login-page::before {
   content: '';
   position: absolute;
@@ -145,15 +151,6 @@ const handleLogin = async () => {
   line-height: 1.6;
 }
 
-.subtitle code {
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-  background-clip: text;
-  font-weight: 600;
-  font-family: 'Monaco', 'Menlo', monospace;
-}
-
 .hint {
   margin-top: 16px;
   font-size: 13px;
@@ -185,4 +182,3 @@ const handleLogin = async () => {
   }
 }
 </style>
-

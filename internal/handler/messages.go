@@ -1,9 +1,11 @@
 package handler
 
 import (
+	"bufio"
 	"encoding/json"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -12,6 +14,7 @@ import (
 
 	"awesomeProject/internal/combo"
 	appconfig "awesomeProject/internal/config"
+	"awesomeProject/internal/middleware"
 	"awesomeProject/internal/model"
 	"awesomeProject/internal/translator/messages"
 	"awesomeProject/pkg/utils"
@@ -21,6 +24,9 @@ import (
 var (
 	conversationModelMu sync.RWMutex
 	conversationModel   = make(map[string]conversationModelEntry) // metadata.user_id -> (model_id,last_seen)
+
+	temporarilyDisabledModelMu sync.RWMutex
+	temporarilyDisabledModel   = make(map[string]time.Time) // model_id -> disabled_until
 )
 
 type conversationModelEntry struct {
@@ -31,6 +37,7 @@ type conversationModelEntry struct {
 const (
 	conversationModelTTL             = 10 * time.Minute
 	conversationModelCleanupInterval = 15 * time.Minute
+	temporaryModelDisableTTL         = 15 * time.Minute
 )
 
 func init() {
@@ -39,7 +46,8 @@ func init() {
 		ticker := time.NewTicker(conversationModelCleanupInterval)
 		defer ticker.Stop()
 		for range ticker.C {
-			cutoff := time.Now().Add(-conversationModelTTL)
+			now := time.Now()
+			cutoff := now.Add(-conversationModelTTL)
 			conversationModelMu.Lock()
 			for k, v := range conversationModel {
 				if v.ModelID == "" || v.LastSeen.Before(cutoff) {
@@ -47,6 +55,7 @@ func init() {
 				}
 			}
 			conversationModelMu.Unlock()
+			cleanupTemporarilyDisabledModels(now)
 		}
 	}()
 }
@@ -139,6 +148,51 @@ func anthropicErrorFromBody(c *gin.Context, statusCode int, body []byte) {
 	anthropicError(c, statusCode, errorType, message)
 }
 
+func disableModelTemporarily(modelID string, ttl time.Duration) {
+	id := strings.TrimSpace(modelID)
+	if id == "" || ttl <= 0 {
+		return
+	}
+	disabledUntil := time.Now().Add(ttl)
+	temporarilyDisabledModelMu.Lock()
+	temporarilyDisabledModel[id] = disabledUntil
+	temporarilyDisabledModelMu.Unlock()
+	utils.Logger.Printf("[ClaudeRouter] model_disable: model=%s disabled_until=%s ttl=%s", id, disabledUntil.Format(time.RFC3339), ttl)
+}
+
+func isModelTemporarilyDisabled(modelID string) bool {
+	id := strings.TrimSpace(modelID)
+	if id == "" {
+		return false
+	}
+	now := time.Now()
+	temporarilyDisabledModelMu.RLock()
+	disabledUntil, ok := temporarilyDisabledModel[id]
+	temporarilyDisabledModelMu.RUnlock()
+	if !ok {
+		return false
+	}
+	if now.Before(disabledUntil) {
+		return true
+	}
+	temporarilyDisabledModelMu.Lock()
+	if currentUntil, currentOK := temporarilyDisabledModel[id]; currentOK && !now.Before(currentUntil) {
+		delete(temporarilyDisabledModel, id)
+	}
+	temporarilyDisabledModelMu.Unlock()
+	return false
+}
+
+func cleanupTemporarilyDisabledModels(now time.Time) {
+	temporarilyDisabledModelMu.Lock()
+	for k, until := range temporarilyDisabledModel {
+		if !now.Before(until) {
+			delete(temporarilyDisabledModel, k)
+		}
+	}
+	temporarilyDisabledModelMu.Unlock()
+}
+
 func (h *MessagesHandler) handleMessages(c *gin.Context) {
 	// 每次请求打一条日志，便于确认「重启后持续请求」来自客户端自动重试（如 Claude Code/Cursor）；关闭对应对话会话即可停止重试。
 	ua := c.GetHeader("User-Agent")
@@ -214,6 +268,11 @@ func (h *MessagesHandler) handleMessages(c *gin.Context) {
 			anthropicError(c, http.StatusNotFound, "not_found_error", "Unknown model: "+requestedModel)
 			return
 		}
+		if isModelTemporarilyDisabled(m.ID) {
+			utils.Logger.Printf("[ClaudeRouter] messages: step=resolve_model err=model_temp_disabled model=%s", m.ID)
+			anthropicError(c, http.StatusBadRequest, "invalid_request_error", "Model temporarily disabled: "+m.ID)
+			return
+		}
 		targetModel = m
 		utils.Logger.Printf("[ClaudeRouter] messages: step=resolve_model using_cached model=%s", targetModel.ID)
 	} else {
@@ -239,6 +298,11 @@ func (h *MessagesHandler) handleMessages(c *gin.Context) {
 			anthropicError(c, http.StatusBadRequest, "invalid_request_error", "Combo has no selectable items")
 			return
 		}
+		if isModelTemporarilyDisabled(chosenID) {
+			utils.Logger.Printf("[ClaudeRouter] messages: step=resolve_model err=model_temp_disabled model=%s", chosenID)
+			anthropicError(c, http.StatusBadRequest, "invalid_request_error", "Model temporarily disabled: "+chosenID)
+			return
+		}
 		m, err := model.GetModel(chosenID)
 		if err != nil {
 			anthropicError(c, http.StatusBadRequest, "invalid_request_error", "Combo item model not found: "+chosenID)
@@ -262,6 +326,11 @@ func (h *MessagesHandler) handleMessages(c *gin.Context) {
 
 	if !targetModel.Enabled {
 		anthropicError(c, http.StatusBadRequest, "invalid_request_error", "Model disabled: "+targetModel.ID)
+		return
+	}
+	if isModelTemporarilyDisabled(targetModel.ID) {
+		utils.Logger.Printf("[ClaudeRouter] messages: step=resolve_model err=model_temp_disabled model=%s", targetModel.ID)
+		anthropicError(c, http.StatusBadRequest, "invalid_request_error", "Model temporarily disabled: "+targetModel.ID)
 		return
 	}
 
@@ -397,6 +466,7 @@ func (h *MessagesHandler) handleMessages(c *gin.Context) {
 			conversationModelMu.Unlock()
 			utils.Logger.Printf("[ClaudeRouter] messages: step=clear_cache due_to_error user_id=%s", conversationID)
 		}
+		disableModelTemporarily(targetModel.ID, temporaryModelDisableTTL)
 
 		if c.Request.Context().Err() != nil {
 			utils.Logger.Printf("[ClaudeRouter] messages: client_gone, skip error response")
@@ -428,6 +498,7 @@ func (h *MessagesHandler) handleMessages(c *gin.Context) {
 			conversationModelMu.Unlock()
 			utils.Logger.Printf("[ClaudeRouter] messages: step=clear_cache due_to_status=%d user_id=%s", statusCode, conversationID)
 		}
+		disableModelTemporarily(targetModel.ID, temporaryModelDisableTTL)
 
 		upstreamMsg := extractUpstreamErrorMessage(body)
 		utils.Logger.Printf("[ClaudeRouter] messages: step=upstream_error status=%d message=%s", statusCode, upstreamMsg)
@@ -439,7 +510,6 @@ func (h *MessagesHandler) handleMessages(c *gin.Context) {
 		utils.Logger.Printf("[ClaudeRouter] messages: step=stream_write interface_type=%s response_format=%s", interfaceType, targetModel.ResponseFormat)
 		defer streamBody.Close()
 
-		// 上游为 openai_responses 时，上游返回 OpenAI Responses SSE，需转为 Anthropic 再返回（除非 response_format 指定为 openai_responses）
 		if strings.EqualFold(interfaceType, "openai_responses") && !strings.EqualFold(targetModel.ResponseFormat, "openai_responses") {
 			utils.Logger.Printf("[ClaudeRouter] messages: converting OpenAI Responses stream to Anthropic")
 			pr, pw := io.Pipe()
@@ -448,10 +518,9 @@ func (h *MessagesHandler) handleMessages(c *gin.Context) {
 				messages.ConvertOpenAIResponsesStreamToAnthropic(c.Request.Context(), streamBody, pw)
 			}()
 			c.Header("Content-Type", "text/event-stream")
-			utils.ProxySSE(c, pr)
+			utils.ProxySSE(c, trackUsageStream(c, pr))
 			return
 		}
-		// 上游为 Anthropic 且 response_format 为 openai_responses 时，转为 OpenAI Responses 格式
 		if strings.EqualFold(targetModel.ResponseFormat, "openai_responses") {
 			utils.Logger.Printf("[ClaudeRouter] messages: converting Anthropic stream to OpenAI Responses format")
 			pr, pw := io.Pipe()
@@ -460,12 +529,11 @@ func (h *MessagesHandler) handleMessages(c *gin.Context) {
 				messages.ConvertAnthropicStreamToOpenAIResponses(c.Request.Context(), streamBody, pw)
 			}()
 			c.Header("Content-Type", "text/event-stream")
-			utils.ProxySSE(c, pr)
+			utils.ProxySSE(c, trackUsageStream(c, pr))
 			return
 		}
-		// 默认：直接透传 Anthropic 流
 		c.Header("Content-Type", "text/event-stream")
-		utils.ProxySSE(c, streamBody)
+		utils.ProxySSE(c, trackUsageStream(c, streamBody))
 		return
 	}
 
@@ -498,6 +566,7 @@ func (h *MessagesHandler) handleMessages(c *gin.Context) {
 	}
 
 	utils.Logger.Printf("[ClaudeRouter] messages: step=write_response status=%d len=%d", statusCode, len(body))
+	recordUsageFromBody(c, body)
 	c.Data(statusCode, ct, body)
 }
 
@@ -544,7 +613,6 @@ func extractAnthropicInputText(payload map[string]any) string {
 		return ""
 	}
 
-	// 仅取 messages 中 role=user 的最新一条，作为关键词路由的输入文本（避免 assistant/system 内容干扰）。
 	for i := len(msgs) - 1; i >= 0; i-- {
 		mm, ok := msgs[i].(map[string]any)
 		if !ok {
@@ -580,4 +648,112 @@ func extractAnthropicInputText(payload map[string]any) string {
 		}
 	}
 	return ""
+}
+
+func recordUsageFromBody(c *gin.Context, body []byte) {
+	input, output := extractUsageFromJSON(body)
+	recordUsage(c, input, output)
+}
+
+func trackUsageStream(c *gin.Context, src io.ReadCloser) io.ReadCloser {
+	if src == nil {
+		return nil
+	}
+	pr, pw := io.Pipe()
+	go func() {
+		defer src.Close()
+		defer pw.Close()
+
+		scanner := bufio.NewScanner(src)
+		buf := make([]byte, 0, 64*1024)
+		scanner.Buffer(buf, 1024*1024)
+		var inputTokens int64
+		var outputTokens int64
+
+		for scanner.Scan() {
+			line := scanner.Text()
+			if strings.HasPrefix(line, "data:") {
+				payload := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+				if payload != "" && payload != "[DONE]" {
+					in, out := extractUsageFromJSON([]byte(payload))
+					inputTokens += in
+					outputTokens += out
+				}
+			}
+			if _, err := pw.Write([]byte(line + "\n")); err != nil {
+				return
+			}
+		}
+		if err := scanner.Err(); err != nil {
+			return
+		}
+		recordUsage(c, inputTokens, outputTokens)
+	}()
+	return pr
+}
+
+func extractUsageFromJSON(body []byte) (int64, int64) {
+	if len(body) == 0 {
+		return 0, 0
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return 0, 0
+	}
+	usage, _ := payload["usage"].(map[string]any)
+	if usage == nil {
+		return 0, 0
+	}
+	input := numToInt64(usage["input_tokens"])
+	if input == 0 {
+		input = numToInt64(usage["prompt_tokens"])
+	}
+	output := numToInt64(usage["output_tokens"])
+	if output == 0 {
+		output = numToInt64(usage["completion_tokens"])
+	}
+	if output == 0 {
+		output = numToInt64(usage["output_tokens_details"])
+	}
+	return input, output
+}
+
+func numToInt64(v any) int64 {
+	switch n := v.(type) {
+	case float64:
+		return int64(n)
+	case float32:
+		return int64(n)
+	case int:
+		return int64(n)
+	case int64:
+		return n
+	case int32:
+		return int64(n)
+	case uint64:
+		return int64(n)
+	case json.Number:
+		x, _ := n.Int64()
+		return x
+	case string:
+		x, _ := strconv.ParseInt(strings.TrimSpace(n), 10, 64)
+		return x
+	default:
+		return 0
+	}
+}
+
+func recordUsage(c *gin.Context, input, output int64) {
+	if input <= 0 && output <= 0 {
+		return
+	}
+	u := middleware.CurrentUser(c)
+	if u == nil || strings.TrimSpace(u.Username) == "" {
+		return
+	}
+	if err := model.AddUserUsage(u.Username, input, output); err == nil {
+		u.InputTokens += input
+		u.OutputTokens += output
+		u.TotalTokens += input + output
+	}
 }

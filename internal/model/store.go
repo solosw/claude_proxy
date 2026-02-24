@@ -4,6 +4,7 @@ import (
 	"errors"
 	"strings"
 	"sync"
+	"time"
 
 	"awesomeProject/internal/storage"
 	"gorm.io/gorm"
@@ -72,6 +73,113 @@ func DeleteModel(id string) error {
 		return ErrNotFound
 	}
 	return storage.DB.Where("id = ?", id).Delete(&Model{}).Error
+}
+
+func ListUsers() ([]*User, error) {
+	var users []*User
+	if err := storage.DB.Order("created_at desc").Find(&users).Error; err != nil {
+		return nil, err
+	}
+	return users, nil
+}
+
+func GetUser(username string) (*User, error) {
+	username = strings.TrimSpace(username)
+	if username == "" {
+		return nil, ErrNotFound
+	}
+	var u User
+	if err := storage.DB.Where("username = ?", username).First(&u).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, ErrNotFound
+		}
+		return nil, err
+	}
+	return &u, nil
+}
+
+func GetUserByAPIKey(apiKey string) (*User, error) {
+	apiKey = strings.TrimSpace(apiKey)
+	if apiKey == "" {
+		return nil, ErrNotFound
+	}
+	var u User
+	if err := storage.DB.Where("api_key = ?", apiKey).First(&u).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, ErrNotFound
+		}
+		return nil, err
+	}
+	return &u, nil
+}
+
+func CreateUser(u *User) error {
+	if u == nil {
+		return errors.New("invalid user")
+	}
+	u.Username = strings.TrimSpace(u.Username)
+	u.APIKey = strings.TrimSpace(u.APIKey)
+	if u.Username == "" || u.APIKey == "" {
+		return errors.New("username and api_key required")
+	}
+	if u.Quota < -1 {
+		return errors.New("quota must be -1 or >= 0")
+	}
+	return storage.DB.Create(u).Error
+}
+
+func UpdateUserByUsername(username string, update map[string]any) error {
+	username = strings.TrimSpace(username)
+	if username == "" {
+		return ErrNotFound
+	}
+	if len(update) == 0 {
+		return nil
+	}
+	if v, ok := update["api_key"]; ok {
+		if s, _ := v.(string); strings.TrimSpace(s) == "" {
+			return errors.New("api_key required")
+		}
+	}
+	if v, ok := update["quota"]; ok {
+		switch q := v.(type) {
+		case int64:
+			if q < -1 {
+				return errors.New("quota must be -1 or >= 0")
+			}
+		case int:
+			if q < -1 {
+				return errors.New("quota must be -1 or >= 0")
+			}
+		}
+	}
+	res := storage.DB.Model(&User{}).Where("username = ?", username).Updates(update)
+	if res.Error != nil {
+		return res.Error
+	}
+	if res.RowsAffected == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+func AddUserUsage(username string, inputTokens, outputTokens int64) error {
+	if strings.TrimSpace(username) == "" {
+		return nil
+	}
+	if inputTokens < 0 {
+		inputTokens = 0
+	}
+	if outputTokens < 0 {
+		outputTokens = 0
+	}
+	total := inputTokens + outputTokens
+	return storage.DB.Model(&User{}).Where("username = ?", username).Updates(map[string]any{
+		"input_tokens":  gorm.Expr("input_tokens + ?", inputTokens),
+		"output_tokens": gorm.Expr("output_tokens + ?", outputTokens),
+		"total_tokens":  gorm.Expr("total_tokens + ?", total),
+		"updated_at":    time.Now(),
+	}).Error
 }
 
 // ListCombos 返回所有组合模型。

@@ -58,34 +58,38 @@ func main() {
 	if err != nil {
 		log.Fatalf("failed to init database: %v", err)
 	}
-	if err := db.AutoMigrate(&model.Model{}, &model.Combo{}, &model.ComboItem{}); err != nil {
+	if err := db.AutoMigrate(&model.Model{}, &model.Combo{}, &model.ComboItem{}, &model.User{}); err != nil {
 		log.Fatalf("failed to migrate database: %v", err)
 	}
 
 	apiRoot := router.Group("/back")
-	apiRoot.Use(middleware.APIKeyAuth(cfg.Auth.APIKey))
+
+	// 登录接口不需要认证，直接注册
+	apiRoot.POST("/api/login", func(c *gin.Context) {
+		handler.LoginWithoutAuth(c, cfg)
+	})
+
+	// 需要认证的 API 组
+	authenticated := apiRoot.Group("")
+	authenticated.Use(middleware.APIKeyAuth(cfg.Auth.APIKey))
 
 	chatHandler := handler.NewChatHandler()
-	chatHandler.RegisterRoutes(apiRoot)
+	chatHandler.RegisterRoutes(authenticated)
 
 	messagesHandler := handler.NewMessagesHandler(cfg)
-	messagesHandler.RegisterRoutes(apiRoot)
+	messagesHandler.RegisterRoutes(authenticated)
 
 	// 新增：Codex 直通 /v1/responses
 	codexProxyHandler := handler.NewCodexProxyHandler(cfg)
-	codexProxyHandler.RegisterRoutes(apiRoot)
-
-	v1 := router.Group("/v1")
-	v1.Use(middleware.APIKeyAuth(cfg.Auth.APIKey))
-	messagesHandler.RegisterRoutesV1(v1)
-	codexProxyHandler.RegisterRoutesV1(v1)
+	codexProxyHandler.RegisterRoutes(authenticated)
 
 	chatTestHandler := handler.NewChatTestHandler()
-	chatTestHandler.RegisterRoutes(apiRoot)
+	chatTestHandler.RegisterRoutes(authenticated)
 
-	handler.RegisterModelRoutes(apiRoot, cfg)
+	handler.RegisterModelRoutes(authenticated, cfg)
 
-	router.GET("/healthz", func(c *gin.Context) {
+	// 不需要认证的路由
+	apiRoot.GET("/healthz", func(c *gin.Context) {
 		c.JSON(200, gin.H{"status": "ok"})
 	})
 
