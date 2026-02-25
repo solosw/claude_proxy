@@ -1,6 +1,7 @@
 server:
   addr: "localhost:8090"
-
+gui:
+  enabled: false
 log:
   level: info
 

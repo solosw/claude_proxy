@@ -36,6 +36,10 @@ type Config struct {
 		APIKey string `yaml:"api_key"`
 	} `yaml:"auth"`
 
+	GUI struct {
+		Enabled bool `yaml:"enabled"`
+	} `yaml:"gui"`
+
 	// Operators 系统内置运营商，key 为运营商 ID，选择运营商即使用此处配置的转发逻辑（BaseURL/APIKey/Interface）。
 	Operators map[string]OperatorEndpoint `yaml:"operators"`
 }
@@ -54,4 +58,3 @@ func Load(path string) (*Config, error) {
 
 	return &cfg, nil
 }
-

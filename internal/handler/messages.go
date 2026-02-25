@@ -3,14 +3,11 @@ package handler
 import (
 	"bufio"
 	"encoding/json"
+	"github.com/gin-gonic/gin"
 	"io"
 	"net/http"
 	"strconv"
 	"strings"
-	"sync"
-	"time"
-
-	"github.com/gin-gonic/gin"
 
 	"awesomeProject/internal/combo"
 	appconfig "awesomeProject/internal/config"
@@ -21,40 +18,7 @@ import (
 	"awesomeProject/pkg/utils"
 )
 
-// 对话级模型只选一次：依据 payload.metadata.user_id 判断是否同一对话，首次解析并缓存模型，后续同 user_id 使用缓存模型。
-var (
-	conversationModelMu sync.RWMutex
-	conversationModel   = make(map[string]conversationModelEntry) // metadata.user_id -> (model_id,last_seen)
-)
-
-type conversationModelEntry struct {
-	ModelID  string
-	LastSeen time.Time
-}
-
-const (
-	conversationModelTTL             = 10 * time.Minute
-	conversationModelCleanupInterval = 15 * time.Minute
-)
-
-func init() {
-	// 定期清理对话级模型缓存，避免 metadata.user_id 无限增长导致内存泄漏。
-	go func() {
-		ticker := time.NewTicker(conversationModelCleanupInterval)
-		defer ticker.Stop()
-		for range ticker.C {
-			now := time.Now()
-			cutoff := now.Add(-conversationModelTTL)
-			conversationModelMu.Lock()
-			for k, v := range conversationModel {
-				if v.ModelID == "" || v.LastSeen.Before(cutoff) {
-					delete(conversationModel, k)
-				}
-			}
-			conversationModelMu.Unlock()
-		}
-	}()
-}
+// 对话级模型缓存已移至 modelstate.go，通过统一接口管理
 
 // MessagesHandler 提供 Anthropic 兼容的 /v1/messages 入口，供 Claude Code 调用。
 type MessagesHandler struct {
@@ -172,28 +136,14 @@ func (h *MessagesHandler) handleMessages(c *gin.Context) {
 	var cachedModelID string
 	//conversationID = "" //禁用缓存
 	if conversationID != "" {
-		now := time.Now()
-		conversationModelMu.RLock()
-		ent := conversationModel[conversationID]
-		conversationModelMu.RUnlock()
-		if ent.ModelID != "" {
-			// TTL 过期视为未缓存
-			if !ent.LastSeen.IsZero() && now.Sub(ent.LastSeen) <= conversationModelTTL {
-				cachedModelID = ent.ModelID
-				requestedModel = cachedModelID
-				utils.Logger.Printf("[ClaudeRouter] messages: step=conversation_model cached user_id=%s model=%s", conversationID, requestedModel)
+		if modelID, ok := modelstate.GetConversationModel(conversationID); ok {
+			cachedModelID = modelID
+			requestedModel = cachedModelID
+			c.Set("real_conversation_id", conversationID)
+			utils.Logger.Printf("[ClaudeRouter] messages: step=conversation_model cached user_id=%s model=%s", conversationID, requestedModel)
 
-				// 更新 last_seen
-				conversationModelMu.Lock()
-				ent.LastSeen = now
-				conversationModel[conversationID] = ent
-				conversationModelMu.Unlock()
-			} else {
-				conversationModelMu.Lock()
-				delete(conversationModel, conversationID)
-				conversationModelMu.Unlock()
-			}
 		}
+
 	}
 
 	if requestedModel == "" {
@@ -280,16 +230,8 @@ func (h *MessagesHandler) handleMessages(c *gin.Context) {
 		targetModel = m
 		utils.Logger.Printf("[ClaudeRouter] messages: step=resolve_model combo chosen=%s", chosenID)
 		if conversationID != "" {
-			now := time.Now()
-			conversationModelMu.Lock()
-			if ent, ok := conversationModel[conversationID]; !ok || ent.ModelID == "" {
-				conversationModel[conversationID] = conversationModelEntry{ModelID: targetModel.ID, LastSeen: now}
-				utils.Logger.Printf("[ClaudeRouter] messages: step=conversation_model set user_id=%s model=%s", conversationID, targetModel.ID)
-			} else {
-				ent.LastSeen = now
-				conversationModel[conversationID] = ent
-			}
-			conversationModelMu.Unlock()
+			modelstate.SetConversationModel(conversationID, targetModel.ID)
+			c.Set("real_conversation_id", conversationID)
 		}
 	}
 	c.Set("real_model_id", targetModel.ID)
@@ -430,12 +372,9 @@ func (h *MessagesHandler) handleMessages(c *gin.Context) {
 
 		// 功能2：模型报错时删除缓存
 		if conversationID != "" {
-			conversationModelMu.Lock()
-			delete(conversationModel, conversationID)
-			conversationModelMu.Unlock()
-			utils.Logger.Printf("[ClaudeRouter] messages: step=clear_cache due_to_error user_id=%s", conversationID)
+			modelstate.ClearConversationModel(conversationID)
 		}
-		modelstate.DisableModelTemporarily(targetModel.ID, 15*time.Minute)
+		modelstate.DisableModelTemporarily(targetModel.ID, modelstate.TemporaryModelDisableTTL)
 
 		if c.Request.Context().Err() != nil {
 			utils.Logger.Printf("[ClaudeRouter] messages: client_gone, skip error response")
@@ -462,12 +401,9 @@ func (h *MessagesHandler) handleMessages(c *gin.Context) {
 	if statusCode < 200 || statusCode >= 300 {
 		// 功能2：上游返回错误状态码时也删除缓存
 		if conversationID != "" {
-			conversationModelMu.Lock()
-			delete(conversationModel, conversationID)
-			conversationModelMu.Unlock()
-			utils.Logger.Printf("[ClaudeRouter] messages: step=clear_cache due_to_status=%d user_id=%s", statusCode, conversationID)
+			modelstate.ClearConversationModel(conversationID)
 		}
-		modelstate.DisableModelTemporarily(targetModel.ID, 15*time.Minute)
+		modelstate.DisableModelTemporarily(targetModel.ID, modelstate.TemporaryModelDisableTTL)
 
 		upstreamMsg := extractUpstreamErrorMessage(body)
 		utils.Logger.Printf("[ClaudeRouter] messages: step=upstream_error status=%d message=%s", statusCode, upstreamMsg)

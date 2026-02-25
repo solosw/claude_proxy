@@ -12,7 +12,6 @@ import (
 	"regexp"
 	"sort"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -26,27 +25,7 @@ import (
 
 const codexDefaultBaseURL = "https://chatgpt.com/backend-api"
 
-var (
-	codexConversationModelMu sync.RWMutex
-	codexConversationModel   = make(map[string]conversationModelEntry) // metadata.user_id -> (model_id,last_seen)
-)
-
-func init() {
-	go func() {
-		ticker := time.NewTicker(conversationModelCleanupInterval)
-		defer ticker.Stop()
-		for range ticker.C {
-			cutoff := time.Now().Add(-conversationModelTTL)
-			codexConversationModelMu.Lock()
-			for k, v := range codexConversationModel {
-				if v.ModelID == "" || v.LastSeen.Before(cutoff) {
-					delete(codexConversationModel, k)
-				}
-			}
-			codexConversationModelMu.Unlock()
-		}
-	}()
-}
+// 对话级模型缓存已移至 modelstate.go，通过统一接口管理
 
 // CodexProxyHandler 直接透传 OpenAI Responses API 到 Codex 上游。
 type CodexProxyHandler struct {
@@ -108,6 +87,7 @@ func (h *CodexProxyHandler) handleResponses(c *gin.Context) {
 	}
 
 	conversationID := extractResponsesMetadataUserID(payload)
+	c.Set("real_conversation_id", conversationID)
 	inputText := extractResponsesInputText(payload)
 	_, hasInput := payload["input"]
 	_, hasMessages := payload["messages"]
@@ -189,13 +169,10 @@ func (h *CodexProxyHandler) handleResponses(c *gin.Context) {
 
 		if statusCode < 200 || statusCode >= 300 {
 			if conversationID != "" && usedCache {
-				codexConversationModelMu.Lock()
-				delete(codexConversationModel, conversationID)
-				codexConversationModelMu.Unlock()
-				utils.Logger.Printf("[ClaudeRouter] responses: step=clear_cache reason=upstream_status status=%d", statusCode)
+				modelstate.ClearConversationModel(conversationID)
 			}
 			if targetModel != nil {
-				modelstate.DisableModelTemporarily(targetModel.ID, 15*time.Minute)
+				modelstate.DisableModelTemporarily(targetModel.ID, modelstate.TemporaryModelDisableTTL)
 			}
 			utils.Logger.Printf("[ClaudeRouter] responses: step=upstream_error status=%d content_type=%s body_preview=%s",
 				statusCode, contentType, debugBodySnippet(body, 600))
@@ -247,13 +224,10 @@ func (h *CodexProxyHandler) handleResponses(c *gin.Context) {
 	}
 	if lastErr != nil || resp == nil {
 		if conversationID != "" && usedCache {
-			codexConversationModelMu.Lock()
-			delete(codexConversationModel, conversationID)
-			codexConversationModelMu.Unlock()
-			utils.Logger.Printf("[ClaudeRouter] responses: step=clear_cache reason=upstream_transport_error")
+			modelstate.ClearConversationModel(conversationID)
 		}
 		if targetModel != nil {
-			modelstate.DisableModelTemporarily(targetModel.ID, 15*time.Minute)
+			modelstate.DisableModelTemporarily(targetModel.ID, modelstate.TemporaryModelDisableTTL)
 		}
 		if lastErr != nil {
 			utils.Logger.Printf("[ClaudeRouter] responses: step=upstream_failed err=%v", lastErr)
@@ -288,10 +262,7 @@ func (h *CodexProxyHandler) handleResponses(c *gin.Context) {
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		if conversationID != "" && usedCache {
-			codexConversationModelMu.Lock()
-			delete(codexConversationModel, conversationID)
-			codexConversationModelMu.Unlock()
-			utils.Logger.Printf("[ClaudeRouter] responses: step=clear_cache reason=upstream_status status=%d", resp.StatusCode)
+			modelstate.ClearConversationModel(conversationID)
 		}
 		if targetModel != nil {
 			modelstate.DisableModelTemporarily(targetModel.ID, 15*time.Minute)
@@ -309,28 +280,12 @@ func (h *CodexProxyHandler) handleResponses(c *gin.Context) {
 func (h *CodexProxyHandler) resolveResponseTargetModel(requestedModel, conversationID, inputText string) (*model.Model, bool, error) {
 	// 1) 会话缓存优先（仅 combo 路由后写入）
 	if conversationID != "" {
-		now := time.Now()
-		codexConversationModelMu.RLock()
-		ent := codexConversationModel[conversationID]
-		codexConversationModelMu.RUnlock()
-		if ent.ModelID != "" {
-			if !ent.LastSeen.IsZero() && now.Sub(ent.LastSeen) <= conversationModelTTL {
-				m, err := model.GetModel(ent.ModelID)
-				if err == nil && m.Enabled && !modelstate.IsModelTemporarilyDisabled(m.ID) && isCodexResponsesCandidate(m) {
-					codexConversationModelMu.Lock()
-					ent.LastSeen = now
-					codexConversationModel[conversationID] = ent
-					codexConversationModelMu.Unlock()
-					return m, true, nil
-				}
-				codexConversationModelMu.Lock()
-				delete(codexConversationModel, conversationID)
-				codexConversationModelMu.Unlock()
-			} else {
-				codexConversationModelMu.Lock()
-				delete(codexConversationModel, conversationID)
-				codexConversationModelMu.Unlock()
+		if modelID, ok := modelstate.GetConversationModel(conversationID); ok {
+			m, err := model.GetModel(modelID)
+			if err == nil && m.Enabled && !modelstate.IsModelTemporarilyDisabled(m.ID) && isCodexResponsesCandidate(m) {
+				return m, true, nil
 			}
+			modelstate.ClearConversationModel(conversationID)
 		}
 	}
 
@@ -369,15 +324,8 @@ func (h *CodexProxyHandler) resolveResponseTargetModel(requestedModel, conversat
 			}
 
 			if conversationID != "" {
-				now := time.Now()
-				codexConversationModelMu.Lock()
-				if ent, ok := codexConversationModel[conversationID]; !ok || ent.ModelID == "" {
-					codexConversationModel[conversationID] = conversationModelEntry{ModelID: m.ID, LastSeen: now}
-				} else {
-					ent.LastSeen = now
-					codexConversationModel[conversationID] = ent
-				}
-				codexConversationModelMu.Unlock()
+				modelstate.SetConversationModel(conversationID, m.ID)
+
 			}
 			return m, true, nil
 		}

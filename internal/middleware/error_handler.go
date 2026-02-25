@@ -34,7 +34,6 @@ func ErrorHandler() gin.HandlerFunc {
 		// 检查响应状态码
 		statusCode := rw.statusCode
 
-		// 需要禁用模型的错误码：401、403、429、500+
 		shouldDisable := statusCode >= 400
 
 		if shouldDisable {
@@ -45,6 +44,11 @@ func ErrorHandler() gin.HandlerFunc {
 				modelstate.DisableModelTemporarily(modelID, 15*time.Minute)
 				utils.Logger.Printf("[ClaudeRouter] error_handler: model_disabled model=%s status=%d", modelID, statusCode)
 			}
+			conversionID := extractConversationIDFromRequest(c)
+			if conversionID != "" {
+				modelstate.ClearConversationModel(conversionID)
+
+			}
 		}
 	}
 }
@@ -53,6 +57,16 @@ func ErrorHandler() gin.HandlerFunc {
 func extractModelIDFromRequest(c *gin.Context) string {
 	// 从 Gin 上下文中获取（如果在处理器中设置过）
 	if modelID, exists := c.Get("real_model_id"); exists {
+		if id, ok := modelID.(string); ok {
+			return strings.TrimSpace(id)
+		}
+	}
+
+	return ""
+}
+func extractConversationIDFromRequest(c *gin.Context) string {
+	// 从 Gin 上下文中获取（如果在处理器中设置过）
+	if modelID, exists := c.Get("real_conversation_id"); exists {
 		if id, ok := modelID.(string); ok {
 			return strings.TrimSpace(id)
 		}

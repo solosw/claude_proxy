@@ -11,18 +11,38 @@ import (
 var (
 	temporarilyDisabledModelMu sync.RWMutex
 	temporarilyDisabledModel   = make(map[string]time.Time) // model_id -> disabled_until
+
+	conversationModelMu sync.RWMutex
+	conversationModel   = make(map[string]ConversationModelEntry) // metadata.user_id -> (model_id, last_seen)
 )
 
+type ConversationModelEntry struct {
+	ModelID  string
+	LastSeen time.Time
+}
+
 const (
-	temporaryModelDisableTTL = 15 * time.Minute
+	TemporaryModelDisableTTL         = 15 * time.Minute
+	ConversationModelTTL             = 10 * time.Minute
+	ConversationModelCleanupInterval = 15 * time.Minute
 )
 
 func init() {
+	// 清理临时禁用的模型
 	go func() {
 		ticker := time.NewTicker(5 * time.Minute)
 		defer ticker.Stop()
 		for range ticker.C {
 			CleanupTemporarilyDisabledModels()
+		}
+	}()
+
+	// 清理过期的对话级模型缓存
+	go func() {
+		ticker := time.NewTicker(ConversationModelCleanupInterval)
+		defer ticker.Stop()
+		for range ticker.C {
+			CleanupConversationModels()
 		}
 	}()
 }
@@ -74,4 +94,71 @@ func CleanupTemporarilyDisabledModels() {
 		}
 	}
 	temporarilyDisabledModelMu.Unlock()
+}
+
+// GetConversationModel 获取对话缓存的模型
+func GetConversationModel(conversationID string) (string, bool) {
+	id := strings.TrimSpace(conversationID)
+	if id == "" {
+		return "", false
+	}
+	now := time.Now()
+	conversationModelMu.RLock()
+	ent := conversationModel[id]
+	conversationModelMu.RUnlock()
+
+	if ent.ModelID == "" {
+		return "", false
+	}
+	// TTL 过期视为未缓存
+	if ent.LastSeen.IsZero() || now.Sub(ent.LastSeen) > ConversationModelTTL {
+		conversationModelMu.Lock()
+		delete(conversationModel, id)
+		conversationModelMu.Unlock()
+		return "", false
+	}
+	// 更新 last_seen
+	conversationModelMu.Lock()
+	ent.LastSeen = now
+	conversationModel[id] = ent
+	conversationModelMu.Unlock()
+	return ent.ModelID, true
+}
+
+// SetConversationModel 设置对话缓存的模型
+func SetConversationModel(conversationID, modelID string) {
+	cid := strings.TrimSpace(conversationID)
+	mid := strings.TrimSpace(modelID)
+	if cid == "" || mid == "" {
+		return
+	}
+	conversationModelMu.Lock()
+	conversationModel[cid] = ConversationModelEntry{ModelID: mid, LastSeen: time.Now()}
+	conversationModelMu.Unlock()
+	utils.Logger.Printf("[ClaudeRouter] conversation_model_set: conversation_id=%s model=%s", cid, mid)
+}
+
+// ClearConversationModel 清除对话缓存（出错时调用）
+func ClearConversationModel(conversationID string) {
+	id := strings.TrimSpace(conversationID)
+	if id == "" {
+		return
+	}
+	conversationModelMu.Lock()
+	delete(conversationModel, id)
+	conversationModelMu.Unlock()
+	utils.Logger.Printf("[ClaudeRouter] conversation_model_cleared: conversation_id=%s", id)
+}
+
+// CleanupConversationModels 清理过期的对话级模型缓存
+func CleanupConversationModels() {
+	now := time.Now()
+	cutoff := now.Add(-ConversationModelTTL)
+	conversationModelMu.Lock()
+	for k, v := range conversationModel {
+		if v.ModelID == "" || v.LastSeen.Before(cutoff) {
+			delete(conversationModel, k)
+		}
+	}
+	conversationModelMu.Unlock()
 }

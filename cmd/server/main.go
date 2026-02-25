@@ -2,16 +2,18 @@ package main
 
 import (
 	"log"
+	"runtime"
 	"strings"
-	"time"
+	_ "time"
 
 	appconfig "awesomeProject/internal/config"
+	"awesomeProject/internal/gui"
 	"awesomeProject/internal/handler"
 	"awesomeProject/internal/middleware"
 	"awesomeProject/internal/model"
 	"awesomeProject/internal/storage"
 	"github.com/gin-gonic/gin"
-	"github.com/jchv/go-webview2"
+	"github.com/ncruces/zenity"
 )
 
 func main() {
@@ -94,6 +96,14 @@ func main() {
 		c.JSON(200, gin.H{"status": "ok"})
 	})
 
+	// 隐藏窗口接口（不需要认证，仅 Windows）
+	if runtime.GOOS == "windows" {
+		apiRoot.POST("/api/hide-window", func(c *gin.Context) {
+			hideWindowHandler()
+			c.JSON(200, gin.H{"status": "hidden"})
+		})
+	}
+
 	go func() {
 		log.Printf("server starting on %s", cfg.Server.Addr)
 		if err := router.Run(cfg.Server.Addr); err != nil {
@@ -101,25 +111,23 @@ func main() {
 		}
 	}()
 
-	time.Sleep(500 * time.Millisecond)
+	// 根据配置和平台决定是否启动 GUI
+	guiEnabled := cfg.GUI.Enabled && runtime.GOOS == "windows"
 
-	url := "http://" + cfg.Server.Addr
-	w := webview2.NewWithOptions(webview2.WebViewOptions{
-		Debug:     false,
-		AutoFocus: true,
-		WindowOptions: webview2.WindowOptions{
-			Title:  "Claude",
-			Width:  1200,
-			Height: 800,
-			Center: true,
-		},
-	})
-	if w == nil {
-		log.Fatalln("Failed to load webview2, please ensure WebView2 runtime is installed.")
+	// 显示磁盘托管启动提示
+	zenity.Info(
+		"ClaudeRouter - Disk Hosting Started",
+		zenity.Title("ClaudeRouter"),
+	)
+
+	if guiEnabled {
+		startWindowsGUI(cfg.Server.Addr)
+	} else {
+		// 非 GUI 模式：启动 systray，点击 Show 时打开浏览器
+		log.Printf("Running on %s platform - GUI %s, backend service with system tray",
+			runtime.GOOS,
+			map[bool]string{true: "disabled", false: "not available"}[!cfg.GUI.Enabled])
+		gui.StartBrowserMode(cfg.Server.Addr)
+		select {}
 	}
-	defer w.Destroy()
-	w.SetSize(1200, 800, webview2.HintNone)
-	log.Printf("opening webview: %s", url)
-	w.Navigate(url)
-	w.Run()
 }
