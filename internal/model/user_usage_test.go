@@ -33,10 +33,10 @@ func TestAddUserUsage_Accumulates(t *testing.T) {
 		t.Fatalf("create user: %v", err)
 	}
 
-	if err := AddUserUsage("usage-u1", 100, 50); err != nil {
+	if err := AddUserUsage("usage-u1", 100, 50, 0.01, 0.02); err != nil {
 		t.Fatalf("add usage #1: %v", err)
 	}
-	if err := AddUserUsage("usage-u1", 10, 5); err != nil {
+	if err := AddUserUsage("usage-u1", 10, 5, 0.01, 0.02); err != nil {
 		t.Fatalf("add usage #2: %v", err)
 	}
 

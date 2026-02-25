@@ -4,13 +4,17 @@ go 1.26.0
 
 require (
 	github.com/anthropics/anthropic-sdk-go v1.21.0
+	github.com/getlantern/systray v1.2.2
 	github.com/gin-gonic/gin v1.10.1
 	github.com/glebarez/sqlite v1.11.0
 	github.com/golang-jwt/jwt/v5 v5.3.0
 	github.com/jchv/go-webview2 v0.0.0-20260205173254-56598839c808
+	github.com/ncruces/zenity v0.10.14
 	github.com/openai/openai-go/v3 v3.22.0
+	github.com/router-for-me/CLIProxyAPI/v6 v6.8.26
 	github.com/sashabaranov/go-openai v1.41.2
-	github.com/zserge/lorca v0.1.10
+	github.com/tidwall/gjson v1.18.0
+	github.com/tidwall/sjson v1.2.5
 	golang.org/x/time v0.5.0
 	gopkg.in/yaml.v3 v3.0.1
 	gorm.io/gorm v1.30.1
@@ -31,7 +35,6 @@ require (
 	github.com/getlantern/hex v0.0.0-20190417191902-c6586a6fe0b7 // indirect
 	github.com/getlantern/hidden v0.0.0-20190325191715-f02dbb02be55 // indirect
 	github.com/getlantern/ops v0.0.0-20190325191751-d70cb0d6f85f // indirect
-	github.com/getlantern/systray v1.2.2 // indirect
 	github.com/gin-contrib/sse v0.1.0 // indirect
 	github.com/glebarez/go-sqlite v1.21.2 // indirect
 	github.com/go-playground/locales v0.14.1 // indirect
@@ -52,17 +55,13 @@ require (
 	github.com/mattn/go-isatty v0.0.20 // indirect
 	github.com/modern-go/concurrent v0.0.0-20180306012644-bacd9c7ef1dd // indirect
 	github.com/modern-go/reflect2 v1.0.2 // indirect
-	github.com/ncruces/zenity v0.10.14 // indirect
 	github.com/oxtoacart/bpool v0.0.0-20190530202638-03653db5a59c // indirect
 	github.com/pelletier/go-toml/v2 v2.2.2 // indirect
 	github.com/randall77/makefat v0.0.0-20210315173500-7ddd0e42c844 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
-	github.com/router-for-me/CLIProxyAPI/v6 v6.8.26 // indirect
 	github.com/sirupsen/logrus v1.9.3 // indirect
-	github.com/tidwall/gjson v1.18.0 // indirect
 	github.com/tidwall/match v1.1.1 // indirect
 	github.com/tidwall/pretty v1.2.1 // indirect
-	github.com/tidwall/sjson v1.2.5 // indirect
 	github.com/twitchyliquid64/golang-asm v0.15.1 // indirect
 	github.com/ugorji/go/codec v1.2.12 // indirect
 	golang.org/x/arch v0.8.0 // indirect

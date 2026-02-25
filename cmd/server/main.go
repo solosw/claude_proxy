@@ -12,6 +12,7 @@ import (
 	"awesomeProject/internal/middleware"
 	"awesomeProject/internal/model"
 	"awesomeProject/internal/storage"
+	"awesomeProject/internal/task"
 	"github.com/gin-gonic/gin"
 	"github.com/ncruces/zenity"
 )
@@ -63,6 +64,9 @@ func main() {
 	if err := db.AutoMigrate(&model.Model{}, &model.Combo{}, &model.ComboItem{}, &model.User{}, &model.UsageLog{}); err != nil {
 		log.Fatalf("failed to migrate database: %v", err)
 	}
+
+	// 启动定时清理任务
+	task.StartCleanupTask()
 
 	apiRoot := router.Group("/back")
 

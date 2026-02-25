@@ -178,7 +178,7 @@ func DeleteUser(username string) error {
 	return nil
 }
 
-func AddUserUsage(username string, inputTokens, outputTokens int64) error {
+func AddUserUsage(username string, inputTokens, outputTokens int64, inputPrice, outputPrice float64) error {
 	if strings.TrimSpace(username) == "" {
 		return nil
 	}
@@ -188,18 +188,34 @@ func AddUserUsage(username string, inputTokens, outputTokens int64) error {
 	if outputTokens < 0 {
 		outputTokens = 0
 	}
+	if inputPrice < 0 {
+		inputPrice = 0
+	}
+	if outputPrice < 0 {
+		outputPrice = 0
+	}
 	total := inputTokens + outputTokens
+	// 计算总费用：(inputTokens / 1000) * inputPrice + (outputTokens / 1000) * outputPrice
+	totalCost := (float64(inputTokens)/1000)*inputPrice + (float64(outputTokens)/1000)*outputPrice
+
 	return storage.DB.Model(&User{}).Where("username = ?", username).Updates(map[string]any{
 		"input_tokens":  gorm.Expr("input_tokens + ?", inputTokens),
 		"output_tokens": gorm.Expr("output_tokens + ?", outputTokens),
 		"total_tokens":  gorm.Expr("total_tokens + ?", total),
+		"quota":         gorm.Expr(`
+    CASE
+        WHEN quota < 0 THEN -1
+        WHEN quota - ? < 0 THEN 0
+        ELSE quota - ?
+    END
+`, totalCost, totalCost),
 		"updated_at":    time.Now(),
 	}).Error
 }
 
 // RecordUsageLog 记录单次请求的 token 使用日志。
-func RecordUsageLog(username, modelID string, inputTokens, outputTokens int64, inputPrice, outputPrice float64) error {
-	if strings.TrimSpace(username) == "" || strings.TrimSpace(modelID) == "" {
+func RecordUsageLog(username string, m Model, inputTokens, outputTokens int64, inputPrice, outputPrice float64) error {
+	if strings.TrimSpace(username) == "" || strings.TrimSpace(m.ID) == "" {
 		return nil
 	}
 	if inputTokens < 0 {
@@ -220,12 +236,13 @@ func RecordUsageLog(username, modelID string, inputTokens, outputTokens int64, i
 
 	log := &UsageLog{
 		Username:     username,
-		ModelID:      modelID,
+		ModelID:      m.ID,
 		InputTokens:  inputTokens,
 		OutputTokens: outputTokens,
 		InputPrice:   inputPrice,
 		OutputPrice:  outputPrice,
 		TotalCost:    totalCost,
+		Provider:     m.Provider,
 		CreatedAt:    time.Now(),
 	}
 	return storage.DB.Create(log).Error

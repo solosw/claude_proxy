@@ -667,7 +667,17 @@ func recordUsageWithModel(c *gin.Context, input, output int64, modelID string) {
 		return
 	}
 
-	if err := model.AddUserUsage(u.Username, input, output); err == nil {
+	// 获取模型价格信息
+	var inputPrice, outputPrice float64
+	if strings.TrimSpace(modelID) != "" {
+		m, err := model.GetModel(modelID)
+		if err == nil && m != nil {
+			inputPrice = m.InputPrice
+			outputPrice = m.OutputPrice
+		}
+	}
+
+	if err := model.AddUserUsage(u.Username, input, output, inputPrice, outputPrice); err == nil {
 		u.InputTokens += input
 		u.OutputTokens += output
 		u.TotalTokens += input + output
@@ -677,7 +687,7 @@ func recordUsageWithModel(c *gin.Context, input, output int64, modelID string) {
 	if strings.TrimSpace(modelID) != "" {
 		m, err := model.GetModel(modelID)
 		if err == nil && m != nil {
-			_ = model.RecordUsageLog(u.Username, modelID, input, output, m.InputPrice, m.OutputPrice)
+			_ = model.RecordUsageLog(u.Username, *m, input, output, m.InputPrice, m.OutputPrice)
 		}
 	}
 }
