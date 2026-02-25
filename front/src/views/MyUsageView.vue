@@ -63,6 +63,14 @@ const handleLogout = () => {
   }).catch(() => {});
 };
 
+const copyToClipboard = (text) => {
+  navigator.clipboard.writeText(text).then(() => {
+    ElMessage.success('已复制到剪贴板');
+  }).catch(() => {
+    ElMessage.error('复制失败');
+  });
+};
+
 onMounted(() => {
   loadMyUsage();
   loadUsageLogs();
@@ -87,6 +95,24 @@ onMounted(() => {
 
     <div v-else-if="usage" class="usage-grid">
 
+      <div class="usage-card">
+        <div class="usage-label">用户名</div>
+        <div class="usage-value">{{ usage.username }}</div>
+      </div>
+      <div class="usage-card">
+        <div class="usage-label">API Key</div>
+        <div class="usage-value api-key-display">
+          <span class="api-key-text">{{ usage.api_key }}</span>
+          <el-button
+            link
+            type="primary"
+            size="small"
+            @click="copyToClipboard(usage.api_key)"
+          >
+            复制
+          </el-button>
+        </div>
+      </div>
       <div class="usage-card">
         <div class="usage-label">总计 Token</div>
         <div class="usage-value">{{ usage.total_tokens }}</div>
@@ -210,6 +236,20 @@ onMounted(() => {
 
 .usage-time {
   font-size: 15px;
+}
+
+.api-key-display {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px !important;
+}
+
+.api-key-text {
+  font-family: 'Courier New', monospace;
+  font-size: 12px;
+  word-break: break-all;
+  flex: 1;
 }
 
 .logs-section {

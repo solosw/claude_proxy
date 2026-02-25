@@ -76,6 +76,7 @@ func RegisterModelRoutes(r gin.IRouter, cfg *appconfig.Config) {
 	admin.POST("/users", createUser)
 	admin.PUT("/users/:username", updateUser)
 	admin.GET("/users/:username/usage", getUserUsage)
+	admin.DELETE("/users/:username", deleteUser)
 }
 
 type loginRequest struct {
@@ -195,7 +196,30 @@ func listUsers(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	c.JSON(http.StatusOK, users)
+
+	// 应用筛选条件
+	username := strings.TrimSpace(c.Query("username"))
+	isAdminStr := strings.TrimSpace(c.Query("is_admin"))
+
+	filtered := make([]*model.User, 0)
+	for _, u := range users {
+		// 按用户名筛选
+		if username != "" && !strings.Contains(strings.ToLower(u.Username), strings.ToLower(username)) {
+			continue
+		}
+
+		// 按管理员状态筛选
+		if isAdminStr != "" {
+			isAdmin := isAdminStr == "true" || isAdminStr == "1"
+			if u.IsAdmin != isAdmin {
+				continue
+			}
+		}
+
+		filtered = append(filtered, u)
+	}
+
+	c.JSON(http.StatusOK, filtered)
 }
 
 type userCreateRequest struct {
@@ -301,8 +325,35 @@ func getUserUsage(c *gin.Context) {
 	c.JSON(http.StatusOK, usageRespFromUser(u))
 }
 
+func deleteUser(c *gin.Context) {
+	username := c.Param("username")
+	if strings.TrimSpace(username) == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "username required"})
+		return
+	}
+
+	// 检查用户是否存在
+	_, err := model.GetUser(username)
+	if err != nil {
+		status := http.StatusInternalServerError
+		if err == model.ErrNotFound {
+			status = http.StatusNotFound
+		}
+		c.JSON(status, gin.H{"error": err.Error()})
+		return
+	}
+
+	if err := model.DeleteUser(username); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to delete user"})
+		return
+	}
+
+	c.Status(http.StatusNoContent)
+}
+
 type usageResponse struct {
 	Username     string     `json:"username"`
+	APIKey       string     `json:"api_key"`
 	Quota        int64      `json:"quota"`
 	Remaining    int64      `json:"remaining"`
 	Unlimited    bool       `json:"unlimited"`
@@ -319,6 +370,7 @@ func usageRespFromUser(u *model.User) *usageResponse {
 	}
 	resp := &usageResponse{
 		Username:     u.Username,
+		APIKey:       u.APIKey,
 		Quota:        u.Quota,
 		ExpireAt:     u.ExpireAt,
 		InputTokens:  u.InputTokens,

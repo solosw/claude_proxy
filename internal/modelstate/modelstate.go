@@ -23,8 +23,8 @@ type ConversationModelEntry struct {
 
 const (
 	TemporaryModelDisableTTL         = 15 * time.Minute
-	ConversationModelTTL             = 10 * time.Minute
-	ConversationModelCleanupInterval = 15 * time.Minute
+	ConversationModelTTL             = 5 * time.Minute
+	ConversationModelCleanupInterval = ConversationModelTTL / 2
 )
 
 func init() {

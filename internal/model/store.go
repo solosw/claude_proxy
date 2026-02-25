@@ -163,6 +163,21 @@ func UpdateUserByUsername(username string, update map[string]any) error {
 	return nil
 }
 
+func DeleteUser(username string) error {
+	username = strings.TrimSpace(username)
+	if username == "" {
+		return ErrNotFound
+	}
+	res := storage.DB.Where("username = ?", username).Delete(&User{})
+	if res.Error != nil {
+		return res.Error
+	}
+	if res.RowsAffected == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
 func AddUserUsage(username string, inputTokens, outputTokens int64) error {
 	if strings.TrimSpace(username) == "" {
 		return nil

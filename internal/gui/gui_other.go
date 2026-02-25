@@ -87,7 +87,7 @@ func openInBrowser(url string) {
 
 // loadTrayIcon 从文件加载托盘图标（ICO 格式）
 func loadTrayIcon() []byte {
-	iconPath := "./public/web/favicon.ico"
+	iconPath := "./public/web/logo.ico"
 	data, err := os.ReadFile(iconPath)
 	if err != nil {
 		log.Printf("Failed to load tray icon from %s: %v, using no icon", iconPath, err)

@@ -53,6 +53,7 @@ func APIKeyAuth(apiKey string) gin.HandlerFunc {
 		user, err := model.GetUserByAPIKey(provided)
 		if err != nil {
 			unauthorized(c)
+
 			return
 		}
 

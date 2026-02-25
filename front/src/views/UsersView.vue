@@ -1,7 +1,7 @@
 <script setup>
 import { onMounted, reactive, ref } from 'vue';
 import axios from 'axios';
-import { ElMessage } from 'element-plus';
+import { ElMessage, ElMessageBox } from 'element-plus';
 
 const loading = ref(false);
 const users = ref([]);
@@ -21,13 +21,26 @@ const form = reactive({
 });
 
 const rules = {
-  username: [{ required: true, message: '请输入用户名', trigger: 'blur' }],
+
 };
+
+// 筛选条件
+const filterForm = reactive({
+  username: '',
+  is_admin: '',
+});
 
 const loadUsers = async () => {
   loading.value = true;
   try {
-    const { data } = await axios.get('/api/users');
+    const params = {};
+    if (filterForm.username) {
+      params.username = filterForm.username;
+    }
+    if (filterForm.is_admin !== '') {
+      params.is_admin = filterForm.is_admin;
+    }
+    const { data } = await axios.get('/api/users', { params });
     users.value = data || [];
   } catch (_) {
     ElMessage.error('加载用户列表失败');
@@ -46,6 +59,16 @@ const openCreate = () => {
     is_admin: false,
   });
   dialogVisible.value = true;
+};
+
+const generateUsername = () => {
+  // 生成随机用户名（8位字母数字）
+  const chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
+  let username = '';
+  for (let i = 0; i < 8; i++) {
+    username += chars.charAt(Math.floor(Math.random() * chars.length));
+  }
+  form.username = 'user_' + username;
 };
 
 const openEdit = (row) => {
@@ -73,10 +96,7 @@ const submit = () => {
 
     try {
       if (isEdit.value) {
-        await axios.put(`/api/users/${encodeURIComponent(form.username)}`, {
-          ...payload,
-          api_key: form.api_key,
-        });
+        await axios.put(`/api/users/${encodeURIComponent(form.username)}`, payload);
         ElMessage.success('更新用户成功');
       } else {
         await axios.post('/api/users', {
@@ -107,6 +127,44 @@ const viewUsage = async (row) => {
   }
 };
 
+const deleteUser = (row) => {
+  ElMessageBox.confirm(
+    `确定要删除用户 "${row.username}" 吗？此操作不可撤销。`,
+    '删除用户',
+    {
+      confirmButtonText: '确定',
+      cancelButtonText: '取消',
+      type: 'warning',
+    }
+  )
+    .then(async () => {
+      try {
+        await axios.delete(`/api/users/${encodeURIComponent(row.username)}`);
+        ElMessage.success('用户已删除');
+        await loadUsers();
+      } catch (_) {
+        ElMessage.error('删除用户失败');
+      }
+    })
+    .catch(() => {
+      // 用户取消删除
+    });
+};
+
+const resetFilter = () => {
+  filterForm.username = '';
+  filterForm.is_admin = '';
+  loadUsers();
+};
+
+const copyToClipboard = (text) => {
+  navigator.clipboard.writeText(text).then(() => {
+    ElMessage.success('已复制到剪贴板');
+  }).catch(() => {
+    ElMessage.error('复制失败');
+  });
+};
+
 onMounted(loadUsers);
 </script>
 
@@ -117,12 +175,49 @@ onMounted(loadUsers);
       <el-button type="primary" @click="openCreate">新增用户</el-button>
     </div>
 
+    <!-- 筛选表单 -->
+    <div class="filter-panel mb-4">
+      <el-form :model="filterForm" layout="inline" class="filter-form">
+        <el-form-item label="用户名">
+          <el-input
+            v-model="filterForm.username"
+            placeholder="搜索用户名"
+            clearable
+            @input="loadUsers"
+          />
+        </el-form-item>
+        <el-form-item label="管理员">
+          <el-select
+            v-model="filterForm.is_admin"
+            placeholder="全部"
+            clearable
+            @change="loadUsers"
+          >
+            <el-option label="是" value="true" />
+            <el-option label="否" value="false" />
+          </el-select>
+        </el-form-item>
+        <el-form-item>
+          <el-button @click="resetFilter">重置</el-button>
+        </el-form-item>
+      </el-form>
+    </div>
+
     <el-table v-loading="loading" :data="users" border style="width: 100%">
       <el-table-column prop="username" label="用户名" width="180" />
-      <el-table-column prop="api_key" label="API Key" width="240">
+      <el-table-column prop="api_key" label="API Key" width="300">
         <template #default="{ row }">
-          <span v-if="row.api_key">••••••••</span>
-          <span v-else class="text-gray-400">未设置</span>
+          <div class="api-key-cell">
+            <span class="api-key-text">{{ row.api_key }}</span>
+            <el-button
+              link
+              type="primary"
+              size="small"
+              @click="copyToClipboard(row.api_key)"
+            >
+              复制
+            </el-button>
+          </div>
         </template>
       </el-table-column>
       <el-table-column prop="quota" label="额度" width="120">
@@ -143,10 +238,11 @@ onMounted(loadUsers);
         </template>
       </el-table-column>
       <el-table-column prop="total_tokens" label="总 Token" width="140" />
-      <el-table-column label="操作" width="220" fixed="right">
+      <el-table-column label="操作" width="280" fixed="right">
         <template #default="{ row }">
           <el-button size="small" @click="openEdit(row)">编辑</el-button>
           <el-button size="small" type="primary" @click="viewUsage(row)">使用情况</el-button>
+          <el-button size="small" type="danger" @click="deleteUser(row)">删除</el-button>
         </template>
       </el-table-column>
     </el-table>
@@ -154,14 +250,18 @@ onMounted(loadUsers);
     <el-dialog v-model="dialogVisible" :title="isEdit ? '编辑用户' : '新增用户'" width="560px">
       <el-form ref="formRef" :model="form" :rules="rules" label-width="100px">
         <el-form-item label="用户名" prop="username">
-          <el-input v-model="form.username" :disabled="isEdit" />
+          <el-input v-model="form.username" :disabled="true" />
+          <span v-if="!isEdit" class="form-hint-inline">系统自动生成</span>
+        </el-form-item>
+        <el-form-item v-if="!isEdit">
+          <el-button @click="generateUsername">生成用户名</el-button>
         </el-form-item>
         <el-form-item v-if="isEdit" label="API Key" prop="api_key">
-          <el-input v-model="form.api_key" show-password />
+          <el-input v-model="form.api_key" show-password disabled />
         </el-form-item>
         <el-alert
           v-else
-          title="创建用户时 API Key 由系统自动生成（32位字母数字）"
+          title="创建用户时用户名和 API Key 由系统自动生成"
           type="info"
           :closable="false"
           show-icon
@@ -214,10 +314,35 @@ onMounted(loadUsers);
   animation: fadeInUp 0.6s ease-out;
 }
 
+.filter-panel {
+  background: #f5f7fa;
+  padding: 12px;
+  border-radius: 4px;
+}
+
+.filter-form {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+}
+
 .form-hint-inline {
   font-size: 12px;
   color: #6b7280;
   margin-left: 12px;
+}
+
+.api-key-cell {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.api-key-text {
+  font-family: 'Courier New', monospace;
+  font-size: 12px;
+  word-break: break-all;
+  flex: 1;
 }
 
 .dialog-footer {
