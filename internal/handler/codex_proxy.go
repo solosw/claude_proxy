@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"regexp"
@@ -15,7 +16,8 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	openaiSDK "github.com/sashabaranov/go-openai"
+	sdktranslator "github.com/router-for-me/CLIProxyAPI/v6/sdk/translator"
+	_ "github.com/router-for-me/CLIProxyAPI/v6/sdk/translator/builtin"
 
 	"awesomeProject/internal/combo"
 	appconfig "awesomeProject/internal/config"
@@ -123,7 +125,9 @@ func (h *CodexProxyHandler) handleResponses(c *gin.Context) {
 		case isDirectResponsesPassthroughModel(targetModel):
 			adapterMode = "passthrough_direct"
 		case isOpenAICompatibleModel(targetModel):
-			adapterMode = "adapt_openai_compatible"
+			adapterMode = "adapt_openai_compatible_sdk"
+		case isAnthropicModel(targetModel):
+			adapterMode = "adapt_anthropic_sdk"
 		default:
 			adapterMode = "passthrough_other"
 		}
@@ -150,10 +154,10 @@ func (h *CodexProxyHandler) handleResponses(c *gin.Context) {
 	}
 	utils.Logger.Printf("[ClaudeRouter] responses: step=upstream_request_body len=%d body=%s", len(reqBody), reqBody)
 
-	if adapterMode == "adapt_openai_compatible" {
-		utils.Logger.Printf("[ClaudeRouter] responses: step=dispatch mode=sdk_openai_compatible base_url=%s api_key_set=%v", baseURL, apiKey != "")
-		statusCode, contentType, body, streamBody := executeOpenAICompatibleResponsesViaSDK(
-			c.Request.Context(), apiKey, baseURL, upstreamModel, reqBody, streamRequested,
+	if strings.HasPrefix(adapterMode, "adapt_") {
+		utils.Logger.Printf("[ClaudeRouter] responses: step=dispatch mode=%s base_url=%s api_key_set=%v", adapterMode, baseURL, apiKey != "")
+		statusCode, contentType, body, streamBody := executeResponsesViaSDKAdapter(
+			c.Request.Context(), apiKey, baseURL, upstreamModel, reqBody, streamRequested, adapterMode,
 		)
 
 		if contentType == "" {
@@ -161,7 +165,7 @@ func (h *CodexProxyHandler) handleResponses(c *gin.Context) {
 		}
 
 		if streamBody != nil && statusCode >= 200 && statusCode < 300 {
-			utils.Logger.Printf("[ClaudeRouter] responses: step=proxy_stream mode=sdk_openai_compatible status=%d", statusCode)
+			utils.Logger.Printf("[ClaudeRouter] responses: step=proxy_stream mode=%s status=%d", adapterMode, statusCode)
 			c.Header("Content-Type", "text/event-stream")
 			utils.ProxySSE(c, trackUsageStream(c, streamBody, targetID))
 			return
@@ -363,7 +367,7 @@ func (h *CodexProxyHandler) resolveResponseTargetModel(requestedModel, conversat
 		return nil, false, errors.New("model temporarily disabled: " + m.ID)
 	}
 	if !isCodexResponsesCandidate(m) {
-		return nil, false, errors.New("model must be operator_id=codex or interface_type in [openai_responses, openai_response, openai, openai_compatible]")
+		return nil, false, errors.New("model must be operator_id=codex or interface_type in [openai_responses, openai_response, openai, openai_compatible, anthropic]")
 	}
 	return m, false, nil
 }
@@ -379,7 +383,16 @@ func isCodexResponsesCandidate(m *model.Model) bool {
 	return strings.EqualFold(it, "openai_responses") ||
 		strings.EqualFold(it, "openai_response") ||
 		strings.EqualFold(it, "openai") ||
-		strings.EqualFold(it, "openai_compatible")
+		strings.EqualFold(it, "openai_compatible") ||
+		strings.EqualFold(it, "anthropic")
+}
+
+func isAnthropicModel(m *model.Model) bool {
+	if m == nil {
+		return false
+	}
+	it := strings.TrimSpace(m.Interface)
+	return strings.EqualFold(it, "anthropic")
 }
 
 func pickFallbackResponsesModel(requestedModel string) *model.Model {
@@ -1229,65 +1242,177 @@ func buildResponsesUpstreamURLs(baseURL string) []string {
 	return urls
 }
 
-func executeOpenAICompatibleResponsesViaSDK(
+func executeResponsesViaSDKAdapter(
 	ctx context.Context,
 	apiKey, baseURL, upstreamModel string,
 	responsesRequestRawJSON []byte,
 	streamRequested bool,
+	adapterMode string,
 ) (statusCode int, contentType string, body []byte, streamBody io.ReadCloser) {
-	chatReqRaw := ConvertResponsesToOpenAIChatRequest(upstreamModel, responsesRequestRawJSON, streamRequested)
-	utils.Logger.Printf("[ClaudeRouter] responses: step=sdk_chat_request len=%d body=%s", len(chatReqRaw), chatReqRaw)
-
-	var chatReq openaiSDK.ChatCompletionRequest
-	if err := json.Unmarshal(chatReqRaw, &chatReq); err != nil {
-		b, _ := json.Marshal(gin.H{"error": "invalid adapted chat completions payload"})
+	toFormat := sdktranslator.FormatOpenAI
+	switch adapterMode {
+	case "adapt_anthropic_sdk":
+		toFormat = sdktranslator.FormatClaude
+	case "adapt_openai_compatible_sdk":
+		toFormat = sdktranslator.FormatOpenAI
+	default:
+		b, _ := json.Marshal(gin.H{"error": "unsupported adapter mode"})
 		return http.StatusBadRequest, "application/json", b, nil
 	}
-	if streamRequested {
-		chatReq.Stream = true
+
+	// 直接使用 sdktranslator 将 Responses 格式转换为目标格式
+	translatedReqRaw := sdktranslator.TranslateRequestByFormatName(
+		sdktranslator.FormatCodex,
+		toFormat,
+		upstreamModel,
+		responsesRequestRawJSON,
+		streamRequested,
+	)
+	utils.Logger.Printf("[ClaudeRouter] responses: step=sdk_translated_request mode=%s len=%d body=%s", adapterMode, len(translatedReqRaw), debugBodySnippet(translatedReqRaw, 500))
+	translatedReqRaw, err := normalizeSDKTranslatedRequestPayload(translatedReqRaw, upstreamModel, streamRequested, adapterMode)
+	if err != nil {
+		b, _ := json.Marshal(gin.H{"error": "invalid translated request payload"})
+		return http.StatusBadRequest, "application/json", b, nil
 	}
 
-	sdkBaseURL := normalizeOpenAICompatibleSDKBaseURL(baseURL)
-	utils.Logger.Printf(
-		"[ClaudeRouter] responses: step=sdk_dispatch sdk_base_url=%s model=%s stream=%v api_key_set=%v",
-		sdkBaseURL, chatReq.Model, chatReq.Stream, strings.TrimSpace(apiKey) != "",
-	)
+	upstreamURL, reqHeaders := buildSDKUpstreamRequest(baseURL, apiKey, adapterMode)
+	utils.Logger.Printf("[ClaudeRouter] responses: step=sdk_dispatch mode=%s upstream_url=%s model=%s stream=%v api_key_set=%v",
+		adapterMode, upstreamURL, upstreamModel, streamRequested, strings.TrimSpace(apiKey) != "")
 
-	cfg := openaiSDK.DefaultConfig(strings.TrimSpace(apiKey))
-	cfg.BaseURL = sdkBaseURL
-	cfg.HTTPClient = &http.Client{Timeout: 30 * time.Minute}
-	client := openaiSDK.NewClientWithConfig(cfg)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, upstreamURL, bytes.NewReader(translatedReqRaw))
+	if err != nil {
+		b, _ := json.Marshal(gin.H{"error": "failed to create upstream request"})
+		return http.StatusBadGateway, "application/json", b, nil
+	}
+	for k, v := range reqHeaders {
+		req.Header.Set(k, v)
+	}
 
-	if chatReq.Stream {
-		stream, err := client.CreateChatCompletionStream(ctx, chatReq)
-		if err != nil {
-			status, ct, b := openAICompatibleSDKErrorResponse(err)
-			utils.Logger.Printf("[ClaudeRouter] responses: step=sdk_stream_open_error status=%d body_preview=%s err=%v", status, debugBodySnippet(b, 600), err)
-			return status, ct, b, nil
+	client := &http.Client{Timeout: 30 * time.Minute}
+	resp, err := client.Do(req)
+	if err != nil {
+		b, _ := json.Marshal(gin.H{"error": err.Error()})
+		return http.StatusBadGateway, "application/json", b, nil
+	}
+
+	statusCode = resp.StatusCode
+	contentType = resp.Header.Get("Content-Type")
+	if contentType == "" {
+		contentType = "application/json"
+	}
+
+	if statusCode < 200 || statusCode >= 300 {
+		defer resp.Body.Close()
+		body, _ = io.ReadAll(resp.Body)
+		if len(body) == 0 {
+			body, _ = json.Marshal(gin.H{"error": fmt.Sprintf("upstream error status=%d", statusCode)})
 		}
+		return statusCode, contentType, body, nil
+	}
+
+	if streamRequested {
 		pr, pw := io.Pipe()
 		go func() {
 			defer pw.Close()
-			defer stream.Close()
-			proxyOpenAICompatibleSDKStreamAsResponses(ctx, stream, pw, upstreamModel, responsesRequestRawJSON, chatReqRaw)
+			defer resp.Body.Close()
+			proxySDKStreamAsResponses(ctx, resp.Body, pw, upstreamModel, responsesRequestRawJSON, translatedReqRaw, adapterMode)
 		}()
-		return http.StatusOK, "text/event-stream", nil, pr
+		return statusCode, "text/event-stream", nil, pr
 	}
 
-	resp, err := client.CreateChatCompletion(ctx, chatReq)
+	defer resp.Body.Close()
+	respBodyRaw, err := readSDKNonStreamResponseBody(resp.Body, adapterMode)
 	if err != nil {
-		status, ct, b := openAICompatibleSDKErrorResponse(err)
-		utils.Logger.Printf("[ClaudeRouter] responses: step=sdk_nonstream_error status=%d body_preview=%s err=%v", status, debugBodySnippet(b, 600), err)
-		return status, ct, b, nil
-	}
-
-	chatRespRaw, err := json.Marshal(resp)
-	if err != nil {
-		b, _ := json.Marshal(gin.H{"error": "failed to encode upstream response"})
+		b, _ := json.Marshal(gin.H{"error": err.Error()})
 		return http.StatusBadGateway, "application/json", b, nil
 	}
-	converted := ConvertOpenAIChatToResponsesNonStream(ctx, upstreamModel, responsesRequestRawJSON, chatReqRaw, chatRespRaw, nil)
-	return http.StatusOK, "application/json", []byte(converted), nil
+
+	// 直接使用 sdktranslator 将目标格式转换为 Responses 格式
+	var param any
+	responsesRespRaw := sdktranslator.TranslateNonStreamByFormatName(
+		ctx,
+		toFormat,
+		sdktranslator.FormatCodex,
+		upstreamModel,
+		responsesRequestRawJSON,
+		translatedReqRaw,
+		respBodyRaw,
+		&param,
+	)
+	if strings.TrimSpace(responsesRespRaw) == "" {
+		b, _ := json.Marshal(gin.H{"error": "translated responses response is empty"})
+		return http.StatusBadGateway, "application/json", b, nil
+	}
+
+	return statusCode, "application/json", []byte(responsesRespRaw), nil
+}
+
+func normalizeSDKTranslatedRequestPayload(raw []byte, upstreamModel string, streamRequested bool, adapterMode string) ([]byte, error) {
+	payload := map[string]any{}
+	if len(bytes.TrimSpace(raw)) > 0 {
+		if err := json.Unmarshal(raw, &payload); err != nil {
+			return nil, err
+		}
+	}
+	if payload == nil {
+		payload = map[string]any{}
+	}
+
+	if strings.TrimSpace(upstreamModel) != "" {
+		payload["model"] = strings.TrimSpace(upstreamModel)
+	}
+
+	switch adapterMode {
+	case "adapt_anthropic_sdk":
+		payload["stream"] = streamRequested
+	case "adapt_openai_compatible_sdk":
+		payload["stream"] = streamRequested
+		if _, ok := payload["messages"]; !ok {
+			payload["messages"] = []any{}
+		}
+	}
+	return json.Marshal(payload)
+}
+
+func buildSDKUpstreamRequest(baseURL, apiKey, adapterMode string) (string, map[string]string) {
+	headers := map[string]string{
+		"Content-Type": "application/json",
+		"Accept":       "text/event-stream",
+	}
+	base := strings.TrimSpace(baseURL)
+	base = strings.TrimSuffix(base, "#")
+	base = strings.TrimRight(base, "/")
+
+	switch adapterMode {
+	case "adapt_anthropic_sdk":
+		if base == "" {
+			base = "https://api.anthropic.com"
+		}
+		lower := strings.ToLower(base)
+		switch {
+		case strings.HasSuffix(lower, "/v1/messages"):
+		case strings.HasSuffix(lower, "/messages"):
+			base = strings.TrimSuffix(base, "/messages") + "/v1/messages"
+		case strings.HasSuffix(lower, "/v1"):
+			base = base + "/messages"
+		default:
+			base = base + "/v1/messages"
+		}
+		headers["anthropic-version"] = "2023-06-01"
+		if strings.TrimSpace(apiKey) != "" {
+			headers["x-api-key"] = strings.TrimSpace(apiKey)
+		}
+		return base, headers
+	default:
+		sdkBaseURL := normalizeOpenAICompatibleSDKBaseURL(base)
+		if strings.HasSuffix(strings.ToLower(sdkBaseURL), "/v1") {
+			sdkBaseURL += "/chat/completions"
+		}
+		if strings.TrimSpace(apiKey) != "" {
+			headers["Authorization"] = "Bearer " + strings.TrimSpace(apiKey)
+		}
+		return sdkBaseURL, headers
+	}
 }
 
 func normalizeOpenAICompatibleSDKBaseURL(baseURL string) string {
@@ -1324,98 +1449,78 @@ func normalizeOpenAICompatibleSDKBaseURL(baseURL string) string {
 	return base + "/v1"
 }
 
-func openAICompatibleSDKErrorResponse(err error) (statusCode int, contentType string, body []byte) {
-	statusCode = http.StatusBadGateway
-	contentType = "application/json"
-	msg := "upstream request failed"
-
-	var apiErr *openaiSDK.APIError
-	if errors.As(err, &apiErr) {
-		if apiErr.HTTPStatusCode > 0 {
-			statusCode = apiErr.HTTPStatusCode
-		} else {
-			statusCode = http.StatusBadRequest
+func readSDKNonStreamResponseBody(reader io.Reader, adapterMode string) ([]byte, error) {
+	if adapterMode == "adapt_openai_compatible_sdk" {
+		b, err := io.ReadAll(reader)
+		if err != nil {
+			return nil, err
 		}
-		if s := strings.TrimSpace(apiErr.Message); s != "" {
-			msg = s
-		}
-		payload := map[string]any{"error": msg}
-		if t := strings.TrimSpace(apiErr.Type); t != "" {
-			payload["type"] = t
-		}
-		body, _ = json.Marshal(payload)
-		return
+		return b, nil
 	}
-
-	var reqErr *openaiSDK.RequestError
-	if errors.As(err, &reqErr) {
-		if reqErr.HTTPStatusCode > 0 {
-			statusCode = reqErr.HTTPStatusCode
-		}
-		if len(reqErr.Body) > 0 {
-			if json.Valid(reqErr.Body) {
-				return statusCode, contentType, reqErr.Body
-			}
-			if s := strings.TrimSpace(extractUpstreamErrorMessage(reqErr.Body)); s != "" {
-				msg = s
-			}
-		} else if reqErr.Err != nil && strings.TrimSpace(reqErr.Err.Error()) != "" {
-			msg = reqErr.Err.Error()
-		}
-		body, _ = json.Marshal(map[string]any{"error": msg})
-		return
-	}
-
-	if err != nil && strings.TrimSpace(err.Error()) != "" {
-		msg = err.Error()
-	}
-	body, _ = json.Marshal(map[string]any{"error": msg})
-	return
+	return io.ReadAll(reader)
 }
 
-func proxyOpenAICompatibleSDKStreamAsResponses(
+func proxySDKStreamAsResponses(
 	ctx context.Context,
-	stream *openaiSDK.ChatCompletionStream,
+	reader io.Reader,
 	out io.Writer,
 	model string,
 	originalRequestRawJSON []byte,
-	chatRequestRawJSON []byte,
+	translatedRequestRawJSON []byte,
+	adapterMode string,
 ) {
 	writer := bufio.NewWriter(out)
 	defer writer.Flush()
 
+	scanner := bufio.NewScanner(reader)
+	scanner.Buffer(make([]byte, 0, 64*1024), 10*1024*1024)
+
 	var state any
-	for {
+	for scanner.Scan() {
 		if ctx.Err() != nil {
 			return
 		}
-		chunk, err := stream.Recv()
-		if err != nil {
-			if errors.Is(err, io.EOF) {
-				events := ConvertOpenAIChatToResponses(ctx, model, originalRequestRawJSON, chatRequestRawJSON, []byte("data: [DONE]"), &state)
-				for _, event := range events {
-					_, _ = writer.WriteString(event)
-				}
-				_ = writer.Flush()
-				return
-			}
-			utils.Logger.Printf("[ClaudeRouter] responses: step=sdk_stream_recv_error err=%v", err)
-			return
+		line := bytes.TrimSpace(scanner.Bytes())
+		if len(line) == 0 {
+			continue
 		}
-
-		chunkRaw, marshalErr := json.Marshal(chunk)
-		if marshalErr != nil {
-			utils.Logger.Printf("[ClaudeRouter] responses: step=sdk_stream_chunk_marshal_error err=%v", marshalErr)
+		if !bytes.HasPrefix(line, []byte("data:")) {
 			continue
 		}
 
-		line := "data: " + string(chunkRaw)
-		events := ConvertOpenAIChatToResponses(ctx, model, originalRequestRawJSON, chatRequestRawJSON, []byte(line), &state)
-		for _, event := range events {
-			_, _ = writer.WriteString(event)
+		var fromFormat sdktranslator.Format
+		switch adapterMode {
+		case "adapt_anthropic_sdk":
+			fromFormat = sdktranslator.FormatClaude
+		default:
+			fromFormat = sdktranslator.FormatOpenAI
 		}
-		_ = writer.Flush()
+		// 直接使用 sdktranslator 将流式响应转换为 Responses 格式
+		chunks := sdktranslator.TranslateStreamByFormatName(
+			ctx,
+			fromFormat,
+			sdktranslator.FormatCodex,
+			model,
+			originalRequestRawJSON,
+			translatedRequestRawJSON,
+			bytes.Clone(line),
+			&state,
+		)
+		for _, chunk := range chunks {
+			if strings.TrimSpace(chunk) == "" {
+				continue
+			}
+			_, _ = writer.WriteString(chunk)
+			_ = writer.Flush()
+		}
 	}
+
+	if scanner.Err() != nil {
+		utils.Logger.Printf("[ClaudeRouter] responses: step=sdk_stream_scan_error err=%v", scanner.Err())
+	}
+	// 发送结束信号
+	_, _ = writer.WriteString("data: [DONE]\n\n")
+	_ = writer.Flush()
 }
 
 func copyRequestHeaders(src http.Header, dst http.Header) {

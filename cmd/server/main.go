@@ -80,7 +80,7 @@ func main() {
 	authenticated.Use(middleware.APIKeyAuth(cfg.Auth.APIKey))
 	authenticated.Use(middleware.ErrorHandler())
 
-	chatHandler := handler.NewChatHandler()
+	chatHandler := handler.NewChatHandler(cfg)
 	chatHandler.RegisterRoutes(authenticated)
 
 	messagesHandler := handler.NewMessagesHandler(cfg)

@@ -38,7 +38,7 @@ func (s *CodexStrategy) Execute(ctx context.Context, payload map[string]any, opt
 		originalReq,
 		opts.Stream,
 	)
-	translatedReq, err = normalizeCodexRequestPayload(translatedReq, opts.UpstreamModel)
+	translatedReq, err = normalizeCodexRequestPayload(translatedReq, opts.UpstreamModel, opts.Stream)
 	if err != nil {
 		return 0, "", nil, nil, fmt.Errorf("operator codex: normalize translated payload failed: %w", err)
 	}
@@ -108,7 +108,7 @@ func (s *CodexStrategy) Execute(ctx context.Context, payload map[string]any, opt
 	return statusCode, "application/json", []byte(out), nil, nil
 }
 
-func normalizeCodexRequestPayload(raw []byte, upstreamModel string) ([]byte, error) {
+func normalizeCodexRequestPayload(raw []byte, upstreamModel string, stream bool) ([]byte, error) {
 	payload := map[string]any{}
 	if len(bytes.TrimSpace(raw)) > 0 {
 		if err := json.Unmarshal(raw, &payload); err != nil {
@@ -122,7 +122,7 @@ func normalizeCodexRequestPayload(raw []byte, upstreamModel string) ([]byte, err
 	if strings.TrimSpace(upstreamModel) != "" {
 		payload["model"] = strings.TrimSpace(upstreamModel)
 	}
-	payload["stream"] = true
+	payload["stream"] = stream
 	if _, ok := payload["instructions"]; !ok {
 		payload["instructions"] = ""
 	}
