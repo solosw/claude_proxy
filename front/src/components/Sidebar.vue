@@ -20,6 +20,7 @@ const menuItems = computed(() => {
       { path: '/users', label: '用户管理', icon: 'User' },
       { path: '/operators', label: '运营商', icon: 'Connection' },
       { path: '/combos', label: '组合模型', icon: 'Grid' },
+      { path: '/error-logs', label: '错误日志', icon: 'Warning' },
       { path: '/api-test', label: '测试', icon: 'Promotion' },
     ];
   }

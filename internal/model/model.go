@@ -36,14 +36,16 @@ type Model struct {
 type User struct {
 	Username     string     `json:"username" gorm:"primaryKey;size:100"`
 	APIKey       string     `json:"api_key" gorm:"uniqueIndex;size:255;not null"`
-	Quota        int64      `json:"quota" gorm:"not null;default:-1"` // -1 表示无限
+	Quota        float64    `json:"quota" gorm:"not null;default:-1"` // -1 表示无限
 	ExpireAt     *time.Time `json:"expire_at"`
 	IsAdmin      bool       `json:"is_admin" gorm:"not null;default:false"`
 	InputTokens  int64      `json:"input_tokens" gorm:"not null;default:0"`
 	OutputTokens int64      `json:"output_tokens" gorm:"not null;default:0"`
 	TotalTokens  int64      `json:"total_tokens" gorm:"not null;default:0"`
-	CreatedAt    time.Time  `json:"created_at"`
-	UpdatedAt    time.Time  `json:"updated_at"`
+	// AllowedCombos 逗号分隔的允许使用的 combo ID 列表，空表示不限制
+	AllowedCombos string    `json:"allowed_combos" gorm:"size:2048;not null;default:''"`
+	CreatedAt     time.Time `json:"created_at"`
+	UpdatedAt     time.Time `json:"updated_at"`
 }
 
 // UsageLog 记录每次请求的 token 使用详情。
@@ -54,8 +56,18 @@ type UsageLog struct {
 	ModelID      string    `json:"model_id" gorm:"index;size:100;not null"`
 	InputTokens  int64     `json:"input_tokens" gorm:"not null;default:0"`
 	OutputTokens int64     `json:"output_tokens" gorm:"not null;default:0"`
-	InputPrice   float64   `json:"input_price" gorm:"not null;default:0"`  // 输入单价（元/千 token）
-	OutputPrice  float64   `json:"output_price" gorm:"not null;default:0"` // 输出单价（元/千 token）
+	InputPrice   float64   `json:"-" gorm:"not null;default:0"`  // 输入单价（元/千 token），不返回给前端
+	OutputPrice  float64   `json:"-" gorm:"not null;default:0"` // 输出单价（元/千 token），不返回给前端
 	TotalCost    float64   `json:"total_cost" gorm:"not null;default:0"`   // 总费用（元）
 	CreatedAt    time.Time `json:"created_at" gorm:"index"`
+}
+
+// ErrorLog 记录模型调用失败的错误日志。
+type ErrorLog struct {
+	ID         int64     `json:"id" gorm:"primaryKey;autoIncrement"`
+	ModelID    string    `json:"model_id" gorm:"index;size:100;not null"`
+	Username   string    `json:"username" gorm:"index;size:100;not null"`
+	StatusCode int       `json:"status_code" gorm:"not null;default:0"`
+	ErrorMsg   string    `json:"error_msg" gorm:"size:2048;not null;default:''"`
+	CreatedAt  time.Time `json:"created_at" gorm:"index"`
 }

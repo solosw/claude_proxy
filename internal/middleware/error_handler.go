@@ -1,7 +1,9 @@
 package middleware
 
 import (
+	"awesomeProject/internal/model"
 	"awesomeProject/internal/modelstate"
+	"fmt"
 	"net/http"
 	"strings"
 	"time"
@@ -49,6 +51,12 @@ func ErrorHandler() gin.HandlerFunc {
 				modelstate.ClearConversationModel(conversionID)
 
 			}
+			var username string
+			if u := CurrentUser(c); u != nil {
+				username = u.Username
+			}
+			_ = model.RecordErrorLog(modelID, username, statusCode, fmt.Sprintf("UpStream Error:%v", rw.statusCode))
+
 		}
 	}
 }

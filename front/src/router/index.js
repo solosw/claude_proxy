@@ -8,6 +8,7 @@ const CombosView = () => import("../views/CombosView.vue");
 const OperatorsView = () => import("../views/OperatorsView.vue");
 const UsersView = () => import("../views/UsersView.vue");
 const MyUsageView = () => import("../views/MyUsageView.vue");
+const ErrorLogsView = () => import("../views/ErrorLogsView.vue");
 
 const routes = [
   {
@@ -28,6 +29,7 @@ const routes = [
       { path: "combos", component: CombosView },
       { path: "users", component: UsersView },
       { path: "api-test", component: () => import("@/views/ApiTestView.vue") },
+      { path: "error-logs", component: ErrorLogsView },
     ],
   },
   {

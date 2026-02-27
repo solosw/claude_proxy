@@ -3,6 +3,7 @@ package handler
 import (
 	"awesomeProject/internal/combo"
 	appconfig "awesomeProject/internal/config"
+	"awesomeProject/internal/middleware"
 	"awesomeProject/internal/model"
 	"awesomeProject/internal/modelstate"
 	"awesomeProject/internal/translator/messages"
@@ -107,6 +108,15 @@ func (h *ChatHandler) handleChatCompletions(c *gin.Context) {
 	conversationID := extractChatMetadataUserID(payload)
 	inputText := extractChatInputText(payload)
 
+	// 校验用户是否有权限使用该 combo/model
+	currentUser := middleware.CurrentUser(c)
+	if currentUser != nil && !currentUser.IsAdmin {
+		if err := checkUserModelPermission(currentUser, requestedModel); err != nil {
+			openaiError(c, http.StatusForbidden, "permission_denied", err.Error())
+			return
+		}
+	}
+
 	targetModel, usedCache, err := resolveChatTargetModel(requestedModel, conversationID, inputText)
 	if err != nil {
 		openaiError(c, http.StatusBadRequest, "invalid_request_error", err.Error())
@@ -151,15 +161,22 @@ func (h *ChatHandler) handleChatCompletions(c *gin.Context) {
 	)
 
 	if execErr != nil {
+		// 客户端主动取消请求，不记录错误日志，不封禁模型
+		if c.Request.Context().Err() != nil {
+			return
+		}
 		if conversationID != "" {
 			modelstate.ClearConversationModel(conversationID)
 		}
 		if shouldTemporarilyDisableChatModel(statusCode, execErr) {
 			modelstate.DisableModelTemporarily(targetModel.ID, modelstate.TemporaryModelDisableTTL)
 		}
-		if c.Request.Context().Err() != nil {
-			return
+		// 写入错误日志
+		username := ""
+		if u := middleware.CurrentUser(c); u != nil {
+			username = u.Username
 		}
+		_ = model.RecordErrorLog(targetModel.ID, username, statusCode, execErr.Error())
 		if statusCode >= 400 {
 			openaiErrorFromBody(c, statusCode, body)
 			return
@@ -182,6 +199,12 @@ func (h *ChatHandler) handleChatCompletions(c *gin.Context) {
 		if shouldTemporarilyDisableChatModel(statusCode, nil) {
 			modelstate.DisableModelTemporarily(targetModel.ID, modelstate.TemporaryModelDisableTTL)
 		}
+		// 写入错误日志
+		username := ""
+		if u := middleware.CurrentUser(c); u != nil {
+			username = u.Username
+		}
+		_ = model.RecordErrorLog(targetModel.ID, username, statusCode, fmt.Sprintf("upstream error status=%d", statusCode))
 		openaiErrorFromBody(c, statusCode, body)
 		return
 	}
@@ -721,4 +744,26 @@ func looksLikeSSEPayload(body []byte) bool {
 		return true
 	}
 	return bytes.Contains(trimmed, []byte("\ndata:")) || bytes.Contains(trimmed, []byte("\nevent:"))
+}
+
+// checkUserModelPermission 校验用户是否有权限使用指定的 combo/model。
+// allowed_combos 为空表示不限制；非空时仅允许列表内的 combo ID。
+// 对于非 combo 的普通 model，不做限制。
+func checkUserModelPermission(u *model.User, requestedModel string) error {
+	allowedRaw := strings.TrimSpace(u.AllowedCombos)
+	// 空表示不限制
+	if allowedRaw == "" {
+		return nil
+	}
+	// 非 combo 模型不受限制
+	if !model.IsComboID(requestedModel) {
+		return nil
+	}
+	// 检查是否在白名单内
+	for _, id := range strings.Split(allowedRaw, ",") {
+		if strings.TrimSpace(id) == requestedModel {
+			return nil
+		}
+	}
+	return fmt.Errorf("model %s is not allowed for this user", requestedModel)
 }

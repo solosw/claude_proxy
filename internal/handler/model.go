@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"awesomeProject/pkg/utils"
 	"crypto/rand"
 	"errors"
 	"math/big"
@@ -77,6 +78,8 @@ func RegisterModelRoutes(r gin.IRouter, cfg *appconfig.Config) {
 	admin.PUT("/users/:username", updateUser)
 	admin.GET("/users/:username/usage", getUserUsage)
 	admin.DELETE("/users/:username", deleteUser)
+
+	admin.GET("/error-logs", listErrorLogs)
 }
 
 type loginRequest struct {
@@ -223,10 +226,11 @@ func listUsers(c *gin.Context) {
 }
 
 type userCreateRequest struct {
-	Username string     `json:"username"`
-	Quota    int64      `json:"quota"`
-	ExpireAt *time.Time `json:"expire_at"`
-	IsAdmin  bool       `json:"is_admin"`
+	Username      string     `json:"username"`
+	Quota         float64    `json:"quota"`
+	ExpireAt      *time.Time `json:"expire_at"`
+	IsAdmin       bool       `json:"is_admin"`
+	AllowedCombos *string    `json:"allowed_combos"`
 }
 
 func createUser(c *gin.Context) {
@@ -249,11 +253,12 @@ func createUser(c *gin.Context) {
 			return
 		}
 		u := &model.User{
-			Username: username,
-			APIKey:   apiKey,
-			Quota:    req.Quota,
-			ExpireAt: req.ExpireAt,
-			IsAdmin:  req.IsAdmin,
+			Username:      username,
+			APIKey:        apiKey,
+			Quota:         float64(req.Quota),
+			ExpireAt:      req.ExpireAt,
+			IsAdmin:       req.IsAdmin,
+			AllowedCombos: *(req.AllowedCombos),
 		}
 		if err := model.CreateUser(u); err != nil {
 			if strings.Contains(strings.ToLower(err.Error()), "unique") {
@@ -270,19 +275,22 @@ func createUser(c *gin.Context) {
 }
 
 type userUpdateRequest struct {
-	APIKey   *string    `json:"api_key"`
-	Quota    *int64     `json:"quota"`
-	ExpireAt *time.Time `json:"expire_at"`
-	IsAdmin  *bool      `json:"is_admin"`
+	APIKey        *string    `json:"api_key"`
+	Quota         *float64   `json:"quota"`
+	ExpireAt      *time.Time `json:"expire_at"`
+	IsAdmin       *bool      `json:"is_admin"`
+	AllowedCombos *string    `json:"allowed_combos"`
 }
 
 func updateUser(c *gin.Context) {
 	username := c.Param("username")
 	var req userUpdateRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid body"})
+		utils.Logger.Printf("[ClaudeRouter] updateUser: parse error username=%s err=%v", username, err)
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid body: " + err.Error()})
 		return
 	}
+	utils.Logger.Printf("[ClaudeRouter] updateUser: username=%s req=%+v", username, req)
 	update := map[string]any{}
 	if req.APIKey != nil {
 		update["api_key"] = strings.TrimSpace(*req.APIKey)
@@ -296,11 +304,16 @@ func updateUser(c *gin.Context) {
 	if req.ExpireAt != nil {
 		update["expire_at"] = req.ExpireAt
 	}
+	if req.AllowedCombos != nil {
+		update["allowed_combos"] = strings.TrimSpace(*req.AllowedCombos)
+	}
+	utils.Logger.Printf("[ClaudeRouter] updateUser: update map=%+v", update)
 	if len(update) == 0 {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "empty update"})
 		return
 	}
 	if err := model.UpdateUserByUsername(username, update); err != nil {
+		utils.Logger.Printf("[ClaudeRouter] updateUser: db error username=%s err=%v", username, err)
 		status := http.StatusBadRequest
 		if err == model.ErrNotFound {
 			status = http.StatusNotFound
@@ -351,17 +364,43 @@ func deleteUser(c *gin.Context) {
 	c.Status(http.StatusNoContent)
 }
 
+func listErrorLogs(c *gin.Context) {
+	modelID := strings.TrimSpace(c.Query("model_id"))
+	page := 1
+	pageSize := 20
+	if p := c.Query("page"); p != "" {
+		if parsed, err := strconv.Atoi(p); err == nil && parsed > 0 {
+			page = parsed
+		}
+	}
+	if ps := c.Query("page_size"); ps != "" {
+		if parsed, err := strconv.Atoi(ps); err == nil && parsed > 0 && parsed <= 100 {
+			pageSize = parsed
+		}
+	}
+	logs, total, err := model.ListErrorLogs(modelID, page, pageSize)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"logs":  logs,
+		"total": total,
+	})
+}
+
 type usageResponse struct {
-	Username     string     `json:"username"`
-	APIKey       string     `json:"api_key"`
-	Quota        int64      `json:"quota"`
-	Remaining    int64      `json:"remaining"`
-	Unlimited    bool       `json:"unlimited"`
-	ExpireAt     *time.Time `json:"expire_at"`
-	InputTokens  int64      `json:"input_tokens"`
-	OutputTokens int64      `json:"output_tokens"`
-	TotalTokens  int64      `json:"total_tokens"`
-	IsAdmin      bool       `json:"is_admin"`
+	Username      string     `json:"username"`
+	APIKey        string     `json:"api_key"`
+	Quota         float64    `json:"quota"`
+	Remaining     float64    `json:"remaining"`
+	Unlimited     bool       `json:"unlimited"`
+	ExpireAt      *time.Time `json:"expire_at"`
+	InputTokens   int64      `json:"input_tokens"`
+	OutputTokens  int64      `json:"output_tokens"`
+	TotalTokens   int64      `json:"total_tokens"`
+	IsAdmin       bool       `json:"is_admin"`
+	AllowedCombos string     `json:"allowed_combos"`
 }
 
 func usageRespFromUser(u *model.User) *usageResponse {
@@ -369,20 +408,21 @@ func usageRespFromUser(u *model.User) *usageResponse {
 		return nil
 	}
 	resp := &usageResponse{
-		Username:     u.Username,
-		APIKey:       u.APIKey,
-		Quota:        u.Quota,
-		ExpireAt:     u.ExpireAt,
-		InputTokens:  u.InputTokens,
-		OutputTokens: u.OutputTokens,
-		TotalTokens:  u.TotalTokens,
-		IsAdmin:      u.IsAdmin,
+		Username:      u.Username,
+		APIKey:        u.APIKey,
+		Quota:         u.Quota,
+		ExpireAt:      u.ExpireAt,
+		InputTokens:   u.InputTokens,
+		OutputTokens:  u.OutputTokens,
+		TotalTokens:   u.TotalTokens,
+		IsAdmin:       u.IsAdmin,
+		AllowedCombos: u.AllowedCombos,
 	}
 	if u.Quota < 0 {
 		resp.Unlimited = true
 		resp.Remaining = -1
 	} else {
-		resp.Remaining = u.Quota - u.TotalTokens
+		resp.Remaining = u.Quota
 		if resp.Remaining < 0 {
 			resp.Remaining = 0
 		}

@@ -485,11 +485,11 @@ onMounted(() => {
         </el-form-item>
         <el-form-item label="输入价格">
           <el-input-number v-model="form.input_price" :min="0" :step="0.0001" />
-          <span class="form-hint-inline">单位：元/1K tokens</span>
+          <span class="form-hint-inline">单位：元/M tokens</span>
         </el-form-item>
         <el-form-item label="输出价格">
           <el-input-number v-model="form.output_price" :min="0" :step="0.0001" />
-          <span class="form-hint-inline">单位：元/1K tokens</span>
+          <span class="form-hint-inline">单位：元/M tokens</span>
         </el-form-item>
         <el-form-item label="描述">
           <el-input

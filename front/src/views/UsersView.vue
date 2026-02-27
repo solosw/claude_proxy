@@ -5,6 +5,7 @@ import { ElMessage, ElMessageBox } from 'element-plus';
 
 const loading = ref(false);
 const users = ref([]);
+const combos = ref([]);
 const usageLoading = ref(false);
 const usageDialogVisible = ref(false);
 const usageData = ref(null);
@@ -18,11 +19,10 @@ const form = reactive({
   quota: -1,
   expire_at: '',
   is_admin: false,
+  allowed_combos: [],
 });
 
-const rules = {
-
-};
+const rules = {};
 
 // 筛选条件
 const filterForm = reactive({
@@ -34,18 +34,23 @@ const loadUsers = async () => {
   loading.value = true;
   try {
     const params = {};
-    if (filterForm.username) {
-      params.username = filterForm.username;
-    }
-    if (filterForm.is_admin !== '') {
-      params.is_admin = filterForm.is_admin;
-    }
+    if (filterForm.username) params.username = filterForm.username;
+    if (filterForm.is_admin !== '') params.is_admin = filterForm.is_admin;
     const { data } = await axios.get('/api/users', { params });
     users.value = data || [];
   } catch (_) {
     ElMessage.error('加载用户列表失败');
   } finally {
     loading.value = false;
+  }
+};
+
+const loadCombos = async () => {
+  try {
+    const { data } = await axios.get('/api/combos');
+    combos.value = (data || []).filter(c => c.enabled);
+  } catch (_) {
+    // 静默失败
   }
 };
 
@@ -57,12 +62,12 @@ const openCreate = () => {
     quota: -1,
     expire_at: '',
     is_admin: false,
+    allowed_combos: [],
   });
   dialogVisible.value = true;
 };
 
 const generateUsername = () => {
-  // 生成随机用户名（8位字母数字）
   const chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
   let username = '';
   for (let i = 0; i < 8; i++) {
@@ -73,12 +78,16 @@ const generateUsername = () => {
 
 const openEdit = (row) => {
   isEdit.value = true;
+  const allowedCombos = row.allowed_combos
+    ? row.allowed_combos.split(',').map(s => s.trim()).filter(Boolean)
+    : [];
   Object.assign(form, {
     username: row.username,
     api_key: row.api_key,
     quota: row.quota,
     expire_at: row.expire_at ? row.expire_at.slice(0, 19) : '',
     is_admin: !!row.is_admin,
+    allowed_combos: allowedCombos,
   });
   dialogVisible.value = true;
 };
@@ -89,8 +98,10 @@ const submit = () => {
     const payload = {
       quota: Number(form.quota),
       is_admin: !!form.is_admin,
+      allowed_combos: Array.isArray(form.allowed_combos) ? form.allowed_combos.join(',') : '',
     };
-    if (form.expire_at) {
+    // 只有当 expire_at 有值时才添加到 payload
+    if (form.expire_at && typeof form.expire_at === 'string' && form.expire_at.trim() !== '') {
       payload.expire_at = new Date(form.expire_at).toISOString();
     }
 
@@ -107,8 +118,9 @@ const submit = () => {
       }
       dialogVisible.value = false;
       await loadUsers();
-    } catch (_) {
-      ElMessage.error('保存用户失败');
+    } catch (err) {
+      console.error('保存用户失败:', err.response?.data || err.message);
+      ElMessage.error(`保存用户失败: ${err.response?.data?.error || err.message}`);
     }
   });
 };
@@ -146,9 +158,7 @@ const deleteUser = (row) => {
         ElMessage.error('删除用户失败');
       }
     })
-    .catch(() => {
-      // 用户取消删除
-    });
+    .catch(() => {});
 };
 
 const resetFilter = () => {
@@ -165,7 +175,16 @@ const copyToClipboard = (text) => {
   });
 };
 
-onMounted(loadUsers);
+// 展示 allowed_combos 的标签
+const getAllowedComboLabels = (row) => {
+  if (!row.allowed_combos) return [];
+  return row.allowed_combos.split(',').map(s => s.trim()).filter(Boolean);
+};
+
+onMounted(() => {
+  loadUsers();
+  loadCombos();
+});
 </script>
 
 <template>
@@ -204,41 +223,52 @@ onMounted(loadUsers);
     </div>
 
     <el-table v-loading="loading" :data="users" border style="width: 100%">
-      <el-table-column prop="username" label="用户名" width="180" />
-      <el-table-column prop="api_key" label="API Key" width="300">
+      <el-table-column prop="username" label="用户名" width="160" />
+      <el-table-column prop="api_key" label="API Key" width="260">
         <template #default="{ row }">
           <div class="api-key-cell">
             <span class="api-key-text">{{ row.api_key }}</span>
-            <el-button
-              link
-              type="primary"
-              size="small"
-              @click="copyToClipboard(row.api_key)"
-            >
+            <el-button link type="primary" size="small" @click="copyToClipboard(row.api_key)">
               复制
             </el-button>
           </div>
         </template>
       </el-table-column>
-      <el-table-column prop="quota" label="额度" width="120">
+      <el-table-column prop="quota" label="额度" width="100">
         <template #default="{ row }">
           {{ row.quota < 0 ? '无限' : row.quota }}
         </template>
       </el-table-column>
-      <el-table-column prop="expire_at" label="过期时间" width="220">
+      <el-table-column prop="expire_at" label="过期时间" width="180">
         <template #default="{ row }">
           {{ row.expire_at || '不过期' }}
         </template>
       </el-table-column>
-      <el-table-column prop="is_admin" label="管理员" width="120">
+      <el-table-column prop="is_admin" label="管理员" width="90">
         <template #default="{ row }">
           <el-tag :type="row.is_admin ? 'danger' : 'info'">
             {{ row.is_admin ? '是' : '否' }}
           </el-tag>
         </template>
       </el-table-column>
-      <el-table-column prop="total_tokens" label="总 Token" width="140" />
-      <el-table-column label="操作" width="280" fixed="right">
+      <el-table-column label="可用 Combo" min-width="180">
+        <template #default="{ row }">
+          <span v-if="!getAllowedComboLabels(row).length" class="text-gray-400 text-xs">不限制</span>
+          <div v-else class="combo-tags">
+            <el-tag
+              v-for="id in getAllowedComboLabels(row)"
+              :key="id"
+              size="small"
+              type="success"
+              class="mr-1 mb-1"
+            >
+              {{ id }}
+            </el-tag>
+          </div>
+        </template>
+      </el-table-column>
+      <el-table-column prop="total_tokens" label="总 Token" width="120" />
+      <el-table-column label="操作" width="240" fixed="right">
         <template #default="{ row }">
           <el-button size="small" @click="openEdit(row)">编辑</el-button>
           <el-button size="small" type="primary" @click="viewUsage(row)">使用情况</el-button>
@@ -247,8 +277,9 @@ onMounted(loadUsers);
       </el-table-column>
     </el-table>
 
-    <el-dialog v-model="dialogVisible" :title="isEdit ? '编辑用户' : '新增用户'" width="560px">
-      <el-form ref="formRef" :model="form" :rules="rules" label-width="100px">
+    <!-- 新增/编辑用户弹窗 -->
+    <el-dialog v-model="dialogVisible" :title="isEdit ? '编辑用户' : '新增用户'" width="580px">
+      <el-form ref="formRef" :model="form" :rules="rules" label-width="110px">
         <el-form-item label="用户名" prop="username">
           <el-input v-model="form.username" :disabled="true" />
           <span v-if="!isEdit" class="form-hint-inline">系统自动生成</span>
@@ -284,6 +315,23 @@ onMounted(loadUsers);
         <el-form-item label="管理员">
           <el-switch v-model="form.is_admin" />
         </el-form-item>
+        <el-form-item label="可用 Combo">
+          <el-select
+            v-model="form.allowed_combos"
+            multiple
+            clearable
+            placeholder="不选表示不限制，可使用任意模型"
+            style="width: 100%"
+          >
+            <el-option
+              v-for="combo in combos"
+              :key="combo.id"
+              :label="combo.name ? `${combo.name} (${combo.id})` : combo.id"
+              :value="combo.id"
+            />
+          </el-select>
+          <div class="form-hint-block">不选表示不限制，可使用任意 Combo 模型</div>
+        </el-form-item>
       </el-form>
 
       <template #footer>
@@ -294,6 +342,7 @@ onMounted(loadUsers);
       </template>
     </el-dialog>
 
+    <!-- 使用情况弹窗 -->
     <el-dialog v-model="usageDialogVisible" title="用户使用情况" width="520px">
       <el-skeleton v-if="usageLoading" :rows="6" animated />
       <div v-else-if="usageData" class="usage-panel">
@@ -332,6 +381,12 @@ onMounted(loadUsers);
   margin-left: 12px;
 }
 
+.form-hint-block {
+  font-size: 12px;
+  color: #6b7280;
+  margin-top: 4px;
+}
+
 .api-key-cell {
   display: flex;
   align-items: center;
@@ -343,6 +398,11 @@ onMounted(loadUsers);
   font-size: 12px;
   word-break: break-all;
   flex: 1;
+}
+
+.combo-tags {
+  display: flex;
+  flex-wrap: wrap;
 }
 
 .dialog-footer {
@@ -366,14 +426,8 @@ onMounted(loadUsers);
 }
 
 @keyframes fadeInUp {
-  from {
-    opacity: 0;
-    transform: translateY(20px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
+  from { opacity: 0; transform: translateY(20px); }
+  to { opacity: 1; transform: translateY(0); }
 }
 
 .el-table :deep(.el-table__header th .cell) {

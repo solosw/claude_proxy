@@ -6,8 +6,12 @@ log:
   level: info
 
 database:
-  driver: sqlite
-  dsn: "./data/claude_router.db"
+  driver: sqlite # sqlite 或 mysql
+  dsn: "./data/claude_router.db" # sqlite: 文件路径; mysql: "root:password@tcp(localhost:3306)/claude_router?charset=utf8mb4&parseTime=True&loc=Local"
+
+#  driver: mysql # sqlite 或 mysql
+#  dsn: "root:123456@tcp(localhost:3306)/claude_router?charset=utf8mb4&parseTime=True&loc=Local"
+
 
 auth:
   # 访问 ClaudeRouter 的全局 API Key（前端登录和 Claude Code 都使用这个 key）
@@ -65,7 +69,7 @@ operators:
   codex:
     name: codex
     enabled: true
-    base_url: "https://chatgpt.com/backend-api"  # Codex API 基础 URL
-    api_key: "your-codex-token"                    # Codex 访问令牌
+    base_url: "https://chatgpt.com/backend-api" # Codex API 基础 URL
+    api_key: "your-codex-token" # Codex 访问令牌
     interface: "codex"
     interface_type: "openai_responses"

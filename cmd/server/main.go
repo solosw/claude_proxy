@@ -57,11 +57,11 @@ func main() {
 		c.File("./public/web/index.html")
 	})
 
-	db, err := storage.Init(cfg.Database.DSN)
+	db, err := storage.Init(cfg.Database.Driver, cfg.Database.DSN)
 	if err != nil {
 		log.Fatalf("failed to init database: %v", err)
 	}
-	if err := db.AutoMigrate(&model.Model{}, &model.Combo{}, &model.ComboItem{}, &model.User{}, &model.UsageLog{}); err != nil {
+	if err := db.AutoMigrate(&model.Model{}, &model.Combo{}, &model.ComboItem{}, &model.User{}, &model.UsageLog{}, &model.ErrorLog{}); err != nil {
 		log.Fatalf("failed to migrate database: %v", err)
 	}
 

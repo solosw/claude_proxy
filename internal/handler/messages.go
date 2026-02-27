@@ -3,6 +3,7 @@ package handler
 import (
 	"bufio"
 	"encoding/json"
+	"fmt"
 	"github.com/gin-gonic/gin"
 	"io"
 	"net/http"
@@ -150,6 +151,15 @@ func (h *MessagesHandler) handleMessages(c *gin.Context) {
 		utils.Logger.Printf("[ClaudeRouter] messages: step=validate missing model")
 		anthropicError(c, http.StatusBadRequest, "invalid_request_error", "Missing model")
 		return
+	}
+
+	// 校验用户是否有权限使用该 combo/model
+	currentUser := middleware.CurrentUser(c)
+	if currentUser != nil && !currentUser.IsAdmin {
+		if err := checkUserModelPermission(currentUser, requestedModel); err != nil {
+			anthropicError(c, http.StatusForbidden, "permission_denied", err.Error())
+			return
+		}
 	}
 
 	stream := false
@@ -370,16 +380,25 @@ func (h *MessagesHandler) handleMessages(c *gin.Context) {
 	if err != nil {
 		utils.Logger.Printf("[ClaudeRouter] messages: step=execute_err err=%v", err)
 
+		// 客户端主动取消请求，不记录错误日志，不封禁模型
+		if c.Request.Context().Err() != nil {
+			utils.Logger.Printf("[ClaudeRouter] messages: client_gone, skip error response")
+			return
+		}
+
 		// 功能2：模型报错时删除缓存
 		if conversationID != "" {
 			modelstate.ClearConversationModel(conversationID)
 		}
 		modelstate.DisableModelTemporarily(targetModel.ID, modelstate.TemporaryModelDisableTTL)
 
-		if c.Request.Context().Err() != nil {
-			utils.Logger.Printf("[ClaudeRouter] messages: client_gone, skip error response")
-			return
+		// 写入错误日志
+		username := ""
+		if u := middleware.CurrentUser(c); u != nil {
+			username = u.Username
 		}
+		_ = model.RecordErrorLog(targetModel.ID, username, statusCode, err.Error())
+
 		if statusCode >= 400 {
 			upstreamMsg := extractUpstreamErrorMessage(body)
 			utils.Logger.Printf("[ClaudeRouter] messages: step=upstream_error status=%d message=%s", statusCode, upstreamMsg)
@@ -404,6 +423,13 @@ func (h *MessagesHandler) handleMessages(c *gin.Context) {
 			modelstate.ClearConversationModel(conversationID)
 		}
 		modelstate.DisableModelTemporarily(targetModel.ID, modelstate.TemporaryModelDisableTTL)
+
+		// 写入错误日志
+		username := ""
+		if u := middleware.CurrentUser(c); u != nil {
+			username = u.Username
+		}
+		_ = model.RecordErrorLog(targetModel.ID, username, statusCode, fmt.Sprintf("upstream error status=%d", statusCode))
 
 		upstreamMsg := extractUpstreamErrorMessage(body)
 		utils.Logger.Printf("[ClaudeRouter] messages: step=upstream_error status=%d message=%s", statusCode, upstreamMsg)
@@ -562,6 +588,7 @@ func recordUsageFromBody(c *gin.Context, body []byte) {
 
 func recordUsageFromBodyWithModel(c *gin.Context, body []byte, modelID string) {
 	input, output := extractUsageFromJSON(body)
+	utils.Logger.Printf("[ClaudeRouter] usage: upstream model=%s input=%d output=%d", modelID, input, output)
 	recordUsageWithModel(c, input, output, modelID)
 }
 
@@ -597,6 +624,7 @@ func trackUsageStream(c *gin.Context, src io.ReadCloser, modelID string) io.Read
 		if err := scanner.Err(); err != nil {
 			return
 		}
+		utils.Logger.Printf("[ClaudeRouter] usage: upstream model=%s stream input=%d output=%d", modelID, inputTokens, outputTokens)
 		recordUsageWithModel(c, inputTokens, outputTokens, modelID)
 	}()
 	return pr
@@ -608,10 +636,12 @@ func extractUsageFromJSON(body []byte) (int64, int64) {
 	}
 	var payload map[string]any
 	if err := json.Unmarshal(body, &payload); err != nil {
+		utils.Logger.Printf("[ClaudeRouter] usage: parse error: %v", err)
 		return 0, 0
 	}
 	usage, _ := payload["usage"].(map[string]any)
 	if usage == nil {
+		utils.Logger.Printf("[ClaudeRouter] usage: no usage field in response")
 		return 0, 0
 	}
 	input := numToInt64(usage["input_tokens"])
@@ -625,6 +655,7 @@ func extractUsageFromJSON(body []byte) (int64, int64) {
 	if output == 0 {
 		output = numToInt64(usage["output_tokens_details"])
 	}
+	utils.Logger.Printf("[ClaudeRouter] usage: extracted input=%d output=%d", input, output)
 	return input, output
 }
 

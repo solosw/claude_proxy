@@ -67,7 +67,7 @@ func APIKeyAuth(apiKey string) gin.HandlerFunc {
 			return
 		}
 
-		if user.Quota >= 0 && user.TotalTokens >= user.Quota {
+		if user.Quota <= 0.1 && user.Quota >= 0 {
 			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{
 				"code":    http.StatusForbidden,
 				"success": false,

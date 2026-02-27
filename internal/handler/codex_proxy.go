@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"awesomeProject/internal/middleware"
 	"awesomeProject/internal/modelstate"
 	"bufio"
 	"bytes"
@@ -86,6 +87,15 @@ func (h *CodexProxyHandler) handleResponses(c *gin.Context) {
 		utils.Logger.Printf("[ClaudeRouter] responses: step=validate missing model")
 		c.JSON(http.StatusBadRequest, gin.H{"error": "missing model"})
 		return
+	}
+
+	// 校验用户是否有权限使用该 combo/model
+	currentUser := middleware.CurrentUser(c)
+	if currentUser != nil && !currentUser.IsAdmin {
+		if err := checkUserModelPermission(currentUser, requestedModel); err != nil {
+			c.JSON(http.StatusForbidden, gin.H{"error": err.Error()})
+			return
+		}
 	}
 
 	conversationID := extractResponsesMetadataUserID(payload)
@@ -178,6 +188,12 @@ func (h *CodexProxyHandler) handleResponses(c *gin.Context) {
 			if targetModel != nil {
 				modelstate.DisableModelTemporarily(targetModel.ID, modelstate.TemporaryModelDisableTTL)
 			}
+			// 写入错误日志
+			username := ""
+			if u := middleware.CurrentUser(c); u != nil {
+				username = u.Username
+			}
+			_ = model.RecordErrorLog(targetID, username, statusCode, fmt.Sprintf("upstream error status=%d", statusCode))
 			utils.Logger.Printf("[ClaudeRouter] responses: step=upstream_error status=%d content_type=%s body_preview=%s",
 				statusCode, contentType, debugBodySnippet(body, 600))
 		} else {
@@ -233,6 +249,16 @@ func (h *CodexProxyHandler) handleResponses(c *gin.Context) {
 		if targetModel != nil {
 			modelstate.DisableModelTemporarily(targetModel.ID, modelstate.TemporaryModelDisableTTL)
 		}
+		// 写入错误日志
+		username := ""
+		if u := middleware.CurrentUser(c); u != nil {
+			username = u.Username
+		}
+		errMsg := "upstream request failed"
+		if lastErr != nil {
+			errMsg = lastErr.Error()
+		}
+		_ = model.RecordErrorLog(targetID, username, 0, errMsg)
 		if lastErr != nil {
 			utils.Logger.Printf("[ClaudeRouter] responses: step=upstream_failed err=%v", lastErr)
 			c.JSON(http.StatusBadGateway, gin.H{"error": lastErr.Error()})
@@ -271,6 +297,12 @@ func (h *CodexProxyHandler) handleResponses(c *gin.Context) {
 		if targetModel != nil {
 			modelstate.DisableModelTemporarily(targetModel.ID, 15*time.Minute)
 		}
+		// 写入错误日志
+		username := ""
+		if u := middleware.CurrentUser(c); u != nil {
+			username = u.Username
+		}
+		_ = model.RecordErrorLog(targetID, username, resp.StatusCode, fmt.Sprintf("upstream error status=%d", resp.StatusCode))
 		utils.Logger.Printf("[ClaudeRouter] responses: step=upstream_error status=%d content_type=%s body_preview=%s",
 			resp.StatusCode, contentType, debugBodySnippet(body, 600))
 	} else {

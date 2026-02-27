@@ -1,5 +1,5 @@
 <script setup>
-import { onMounted, ref } from 'vue';
+import { computed, onMounted, ref } from 'vue';
 import axios from 'axios';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { useRouter } from 'vue-router';
@@ -25,6 +25,12 @@ const loadMyUsage = async () => {
     loading.value = false;
   }
 };
+
+// allowed_combos 直接从 usage 返回的数据中获取
+const allowedComboNames = computed(() => {
+  if (!usage.value?.allowed_combos) return [];
+  return usage.value.allowed_combos.split(',').map(s => s.trim()).filter(Boolean);
+});
 
 const loadUsageLogs = async () => {
   logsLoading.value = true;
@@ -127,7 +133,19 @@ onMounted(() => {
       </div>
       <div class="usage-card">
         <div class="usage-label">过期时间</div>
-        <div class="usage-value usage-time">{{ usage.expire_at || '不过期' }}</div>
+        <div class="usage-value usage-time">{{ usage.expire_at ? new Date(usage.expire_at).toLocaleString() : '-'  || '不过期' }}</div>
+      </div>
+      <div v-if="allowedComboNames.length" class="usage-card full-width">
+        <div class="usage-label">可用模型</div>
+        <div class="usage-value combo-tags">
+          <el-tag v-for="name in allowedComboNames" :key="name" type="success" class="mr-2 mb-1">
+            {{ name }}
+          </el-tag>
+        </div>
+      </div>
+      <div v-else class="usage-card full-width">
+        <div class="usage-label">可用模型</div>
+        <div class="usage-value usage-time">不限制（可使用任意模型）</div>
       </div>
     </div>
 
@@ -142,17 +160,31 @@ onMounted(() => {
       >
         <el-table-column prop="model_id" label="模型名"  />
         <el-table-column prop="provider" label="供应商"  />
-        <el-table-column label="消耗总Token"  align="right">
+        <el-table-column label="输入 Token"  align="right">
+          <template #default="{ row }">
+            {{ row.input_tokens || 0 }}
+          </template>
+        </el-table-column>
+        <el-table-column label="输出 Token"  align="right">
+          <template #default="{ row }">
+            {{ row.output_tokens || 0 }}
+          </template>
+        </el-table-column>
+        <el-table-column label="总 Token"  align="right">
           <template #default="{ row }">
             {{ (row.input_tokens || 0) + (row.output_tokens || 0) }}
           </template>
         </el-table-column>
-        <el-table-column prop="total_cost" label="总消耗额度"  align="right">
+        <el-table-column prop="total_cost" label="总费用"  align="right">
           <template #default="{ row }">
-            {{ row.total_cost ? row.total_cost.toFixed(6) : '0' }}
+            {{ row.total_cost ? row.total_cost.toFixed(6) : '0.000000' }}
           </template>
         </el-table-column>
-        <el-table-column prop="created_at" label="时间"  />
+        <el-table-column prop="created_at" label="时间" >
+          <template #default="{row}">
+            {{row.created_at ? new Date(row.created_at).toLocaleString() : '-'}}
+          </template>
+        </el-table-column>
       </el-table>
 
       <div class="pagination-container">
@@ -219,6 +251,16 @@ onMounted(() => {
   border-radius: 12px;
   padding: 16px;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+}
+
+.usage-card.full-width {
+  grid-column: 1 / -1;
+}
+
+.combo-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
 }
 
 .usage-label {

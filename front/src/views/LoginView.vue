@@ -70,9 +70,7 @@ const handleLogin = async () => {
         </el-form-item>
       </el-form>
 
-      <p class="hint">
-        管理员登录后可访问模型与用户管理，普通用户登录后可查看自己的额度与 token 使用情况。
-      </p>
+
     </div>
   </div>
 </template>

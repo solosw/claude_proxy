@@ -195,21 +195,21 @@ func AddUserUsage(username string, inputTokens, outputTokens int64, inputPrice, 
 		outputPrice = 0
 	}
 	total := inputTokens + outputTokens
-	// 计算总费用：(inputTokens / 1000) * inputPrice + (outputTokens / 1000) * outputPrice
-	totalCost := (float64(inputTokens)/1000)*inputPrice + (float64(outputTokens)/1000)*outputPrice
+
+	totalCost := (float64(inputTokens)/1000000)*inputPrice + (float64(outputTokens)/1000000)*outputPrice
 
 	return storage.DB.Model(&User{}).Where("username = ?", username).Updates(map[string]any{
 		"input_tokens":  gorm.Expr("input_tokens + ?", inputTokens),
 		"output_tokens": gorm.Expr("output_tokens + ?", outputTokens),
 		"total_tokens":  gorm.Expr("total_tokens + ?", total),
-		"quota":         gorm.Expr(`
+		"quota": gorm.Expr(`
     CASE
         WHEN quota < 0 THEN -1
         WHEN quota - ? < 0 THEN 0
         ELSE quota - ?
     END
 `, totalCost, totalCost),
-		"updated_at":    time.Now(),
+		"updated_at": time.Now(),
 	}).Error
 }
 
@@ -232,7 +232,7 @@ func RecordUsageLog(username string, m Model, inputTokens, outputTokens int64, i
 	}
 
 	// 计算总费用：(inputTokens / 1000) * inputPrice + (outputTokens / 1000) * outputPrice
-	totalCost := (float64(inputTokens)/1000)*inputPrice + (float64(outputTokens)/1000)*outputPrice
+	totalCost := (float64(inputTokens)/1000000)*inputPrice + (float64(outputTokens)/1000000)*outputPrice
 
 	log := &UsageLog{
 		Username:     username,
@@ -406,4 +406,50 @@ func DeleteCombo(id string) error {
 		}
 		return err
 	})
+}
+
+// RecordErrorLog 记录一条模型调用失败日志。
+func RecordErrorLog(modelID, username string, statusCode int, errMsg string) error {
+	if strings.TrimSpace(modelID) == "" {
+		return nil
+	}
+	msg := errMsg
+	if len(msg) > 2048 {
+		msg = msg[:2000]
+	}
+	entry := &ErrorLog{
+		ModelID:    modelID,
+		Username:   username,
+		StatusCode: statusCode,
+		ErrorMsg:   msg,
+		CreatedAt:  time.Now(),
+	}
+	return storage.DB.Create(entry).Error
+}
+
+// ListErrorLogs 查询错误日志，支持按 modelID 筛选和分页。
+func ListErrorLogs(modelID string, page, pageSize int) ([]ErrorLog, int64, error) {
+	if page < 1 {
+		page = 1
+	}
+	if pageSize < 1 || pageSize > 100 {
+		pageSize = 20
+	}
+
+	query := storage.DB.Model(&ErrorLog{})
+	if strings.TrimSpace(modelID) != "" {
+		query = query.Where("model_id = ?", strings.TrimSpace(modelID))
+	}
+
+	var total int64
+	if err := query.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+
+	var logs []ErrorLog
+	offset := (page - 1) * pageSize
+	if err := query.Order("created_at DESC").Limit(pageSize).Offset(offset).Find(&logs).Error; err != nil {
+		return nil, 0, err
+	}
+	return logs, total, nil
 }
