@@ -1,8 +1,13 @@
 package handler
 
 import (
+	"awesomeProject/internal/combo"
+	appconfig "awesomeProject/internal/config"
 	"awesomeProject/internal/middleware"
+	"awesomeProject/internal/model"
 	"awesomeProject/internal/modelstate"
+	"awesomeProject/internal/translator/messages"
+	"awesomeProject/pkg/utils"
 	"bufio"
 	"bytes"
 	"context"
@@ -10,6 +15,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"regexp"
 	"sort"
@@ -17,18 +23,10 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	sdktranslator "github.com/router-for-me/CLIProxyAPI/v6/sdk/translator"
 	_ "github.com/router-for-me/CLIProxyAPI/v6/sdk/translator/builtin"
-
-	"awesomeProject/internal/combo"
-	appconfig "awesomeProject/internal/config"
-	"awesomeProject/internal/model"
-	"awesomeProject/pkg/utils"
 )
 
 const codexDefaultBaseURL = "https://chatgpt.com/backend-api"
-
-// 对话级模型缓存已移至 modelstate.go，通过统一接口管理
 
 // CodexProxyHandler 直接透传 OpenAI Responses API 到 Codex 上游。
 type CodexProxyHandler struct {
@@ -39,13 +37,11 @@ func NewCodexProxyHandler(cfg *appconfig.Config) *CodexProxyHandler {
 	return &CodexProxyHandler{cfg: cfg}
 }
 
-// RegisterRoutes 注册 /v1/responses（挂到 /back 组后即 /back/v1/responses）。
 func (h *CodexProxyHandler) RegisterRoutes(r gin.IRoutes) {
 	r.POST("/v1/responses", h.handleResponses)
 	r.OPTIONS("/v1/responses", h.handleOptions)
 }
 
-// RegisterRoutesV1 注册到已带 /v1 前缀的路由组。
 func (h *CodexProxyHandler) RegisterRoutesV1(r gin.IRoutes) {
 	r.POST("/responses", h.handleResponses)
 	r.OPTIONS("/responses", h.handleOptions)
@@ -57,78 +53,75 @@ func (h *CodexProxyHandler) handleOptions(c *gin.Context) {
 
 func (h *CodexProxyHandler) handleResponses(c *gin.Context) {
 	ua := c.GetHeader("User-Agent")
-	if len(ua) > 120 {
-		ua = ua[:120] + "..."
+	if len(ua) > 80 {
+		ua = ua[:80] + "..."
 	}
-	utils.Logger.Printf("[ClaudeRouter] responses: request path=%s remote=%s ua=%s", c.Request.URL.Path, c.ClientIP(), ua)
+	utils.Logger.Debugf("[ClaudeRouter] responses: request path=%s remote=%s user_agent=%s", c.Request.URL.Path, c.ClientIP(), ua)
 
 	raw, err := c.GetRawData()
 	if err != nil {
-		utils.Logger.Printf("[ClaudeRouter] responses: step=read_body err=%v", err)
-		c.JSON(http.StatusBadRequest, gin.H{"error": "failed to read body"})
+		openaiError(c, http.StatusBadRequest, "invalid_request_error", "Failed to read body")
 		return
 	}
-	utils.Logger.Printf("[ClaudeRouter] responses: step=request_raw len=%d body=%s", len(raw), raw)
 
 	var payload map[string]any
 	if err := json.Unmarshal(raw, &payload); err != nil {
-		utils.Logger.Printf("[ClaudeRouter] responses: step=parse_json err=%v", err)
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid json"})
+		openaiError(c, http.StatusBadRequest, "invalid_request_error", "Invalid JSON")
 		return
-	}
-	streamRequested := false
-	if v, ok := payload["stream"].(bool); ok {
-		streamRequested = v
 	}
 
 	requestedModel, _ := payload["model"].(string)
 	requestedModel = strings.TrimSpace(requestedModel)
 	if requestedModel == "" {
-		utils.Logger.Printf("[ClaudeRouter] responses: step=validate missing model")
-		c.JSON(http.StatusBadRequest, gin.H{"error": "missing model"})
+		openaiError(c, http.StatusBadRequest, "invalid_request_error", "Missing model")
 		return
 	}
+
+	stream := false
+	if v, ok := payload["stream"].(bool); ok {
+		stream = v
+	}
+
+	conversationID := extractResponsesMetadataUserID(payload)
+	inputText := extractResponsesInputText(payload)
 
 	// 校验用户是否有权限使用该 combo/model
 	currentUser := middleware.CurrentUser(c)
 	if currentUser != nil && !currentUser.IsAdmin {
 		if err := checkUserModelPermission(currentUser, requestedModel); err != nil {
-			c.JSON(http.StatusForbidden, gin.H{"error": err.Error()})
+			openaiError(c, http.StatusForbidden, "permission_denied", err.Error())
 			return
 		}
 	}
 
-	conversationID := extractResponsesMetadataUserID(payload)
-	c.Set("real_conversation_id", conversationID)
-	inputText := extractResponsesInputText(payload)
-	_, hasInput := payload["input"]
-	_, hasMessages := payload["messages"]
-	_, hasTools := payload["tools"]
-	utils.Logger.Printf("[ClaudeRouter] responses: step=request_summary requested_model=%s stream=%v has_input=%v has_messages=%v has_tools=%v conv=%v input_chars=%d",
-		requestedModel, streamRequested, hasInput, hasMessages, hasTools, conversationID != "", len(inputText))
-
-	targetModel, usedCache, err := h.resolveResponseTargetModel(requestedModel, conversationID, inputText)
+	targetModel, usedCache, err := resolveResponseTargetModel(requestedModel, conversationID, inputText)
 	if err != nil {
-		utils.Logger.Printf("[ClaudeRouter] responses: step=resolve_model err=%v requested_model=%s", err, requestedModel)
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		openaiError(c, http.StatusBadRequest, "invalid_request_error", err.Error())
+		return
+	}
+	c.Set("real_model_id", targetModel.ID)
+	if conversationID != "" {
+		c.Set("real_conversation_id", conversationID)
+	}
+
+	interfaceType, baseURL, apiKey, resolveErr := h.resolveResponsesEndpoint(targetModel)
+	if resolveErr != nil {
+		openaiError(c, http.StatusBadRequest, "invalid_request_error", resolveErr.Error())
 		return
 	}
 
-	baseURL := ""
-	apiKey := ""
-	upstreamModel := requestedModel
-
-	if targetModel != nil {
-		baseURL, apiKey = h.resolveResponsesEndpoint(targetModel)
-		upstreamModel = strings.TrimSpace(targetModel.UpstreamID)
-		if upstreamModel == "" {
-			upstreamModel = targetModel.ID
-		}
-	} else {
-		// model 不在本地表时允许直接透传，使用 operators.codex 配置。
-		baseURL, apiKey = h.resolveResponsesEndpoint(nil)
+	upstreamModel := strings.TrimSpace(targetModel.UpstreamID)
+	if upstreamModel == "" {
+		upstreamModel = targetModel.ID
 	}
+
 	payloadToSend := applyResponsesAdapter(payload, upstreamModel, targetModel)
+
+	waitModelQPS(c.Request.Context(), targetModel.ID, targetModel.MaxQPS)
+	if c.Request.Context().Err() != nil {
+		return
+	}
+
 	adapterMode := "passthrough_unknown"
 	if targetModel != nil {
 		switch {
@@ -142,111 +135,31 @@ func (h *CodexProxyHandler) handleResponses(c *gin.Context) {
 			adapterMode = "passthrough_other"
 		}
 	}
-	targetID := ""
-	targetInterface := ""
-	targetOperator := ""
-	if targetModel != nil {
-		targetID = strings.TrimSpace(targetModel.ID)
-		targetInterface = strings.TrimSpace(targetModel.Interface)
-		targetOperator = strings.TrimSpace(targetModel.OperatorID)
-	}
-	_, sendHasInput := payloadToSend["input"]
-	_, sendHasMessages := payloadToSend["messages"]
-	_, sendHasTools := payloadToSend["tools"]
-	utils.Logger.Printf("[ClaudeRouter] responses: step=resolved requested=%s target=%s upstream=%s interface=%s operator=%s used_cache=%v adapter=%s send_has_input=%v send_has_messages=%v send_has_tools=%v",
-		requestedModel, targetID, upstreamModel, targetInterface, targetOperator, usedCache, adapterMode, sendHasInput, sendHasMessages, sendHasTools)
 
-	reqBody, err := json.Marshal(payloadToSend)
-	if err != nil {
-		utils.Logger.Printf("[ClaudeRouter] responses: step=marshal_payload err=%v", err)
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request payload"})
-		return
-	}
-	utils.Logger.Printf("[ClaudeRouter] responses: step=upstream_request_body len=%d body=%s", len(reqBody), reqBody)
+	utils.Logger.Debugf("[ClaudeRouter] responses: step=execute interface=%s model=%s upstream=%s stream=%v adapter=%s",
+		interfaceType, targetModel.ID, upstreamModel, stream, adapterMode)
 
-	if strings.HasPrefix(adapterMode, "adapt_") {
-		utils.Logger.Printf("[ClaudeRouter] responses: step=dispatch mode=%s base_url=%s api_key_set=%v", adapterMode, baseURL, apiKey != "")
-		statusCode, contentType, body, streamBody := executeResponsesViaSDKAdapter(
-			c.Request.Context(), apiKey, baseURL, upstreamModel, reqBody, streamRequested, adapterMode,
-		)
+	statusCode, contentType, body, streamBody, execErr := h.executeResponsesRequest(
+		c.Request.Context(),
+		payloadToSend,
+		messages.ExecuteOptions{
+			UpstreamModel: upstreamModel,
+			APIKey:        apiKey,
+			BaseURL:       baseURL,
+			Stream:        stream,
+		},
+		adapterMode,
+	)
 
-		if contentType == "" {
-			contentType = "application/json"
-		}
-
-		if streamBody != nil && statusCode >= 200 && statusCode < 300 {
-			utils.Logger.Printf("[ClaudeRouter] responses: step=proxy_stream mode=%s status=%d", adapterMode, statusCode)
-			c.Header("Content-Type", "text/event-stream")
-			utils.ProxySSE(c, trackUsageStream(c, streamBody, targetID))
+	if execErr != nil {
+		// 客户端主动取消请求，不记录错误日志，不封禁模型
+		if c.Request.Context().Err() != nil {
 			return
 		}
-
-		if statusCode < 200 || statusCode >= 300 {
-			if conversationID != "" && usedCache {
-				modelstate.ClearConversationModel(conversationID)
-			}
-			if targetModel != nil {
-				modelstate.DisableModelTemporarily(targetModel.ID, modelstate.TemporaryModelDisableTTL)
-			}
-			// 写入错误日志
-			username := ""
-			if u := middleware.CurrentUser(c); u != nil {
-				username = u.Username
-			}
-			_ = model.RecordErrorLog(targetID, username, statusCode, fmt.Sprintf("upstream error status=%d", statusCode))
-			utils.Logger.Printf("[ClaudeRouter] responses: step=upstream_error status=%d content_type=%s body_preview=%s",
-				statusCode, contentType, debugBodySnippet(body, 600))
-		} else {
-			utils.Logger.Printf("[ClaudeRouter] responses: step=upstream_success status=%d content_type=%s body_len=%d",
-				statusCode, contentType, len(body))
-		}
-		c.Data(statusCode, contentType, body)
-		return
-	}
-
-	client := &http.Client{Timeout: 30 * time.Minute}
-	upstreamURLs := buildResponsesUpstreamURLs(baseURL)
-	utils.Logger.Printf("[ClaudeRouter] responses: step=dispatch mode=passthrough_responses base_url=%s candidates=%v api_key_set=%v", baseURL, upstreamURLs, apiKey != "")
-
-	var resp *http.Response
-	var lastErr error
-	for i, upstreamURL := range upstreamURLs {
-		attempt := i + 1
-		utils.Logger.Printf("[ClaudeRouter] responses: step=upstream_attempt idx=%d/%d url=%s", attempt, len(upstreamURLs), upstreamURL)
-		req, reqErr := http.NewRequestWithContext(c.Request.Context(), http.MethodPost, upstreamURL, bytes.NewReader(reqBody))
-		if reqErr != nil {
-			utils.Logger.Printf("[ClaudeRouter] responses: step=build_upstream_request err=%v idx=%d url=%s", reqErr, attempt, upstreamURL)
-			lastErr = reqErr
-			break
-		}
-		copyRequestHeaders(c.Request.Header, req.Header)
-		req.Header.Set("Content-Type", "application/json")
-		if apiKey != "" {
-			req.Header.Set("Authorization", "Bearer "+apiKey)
-		}
-
-		resp, lastErr = client.Do(req)
-		if lastErr != nil {
-			utils.Logger.Printf("[ClaudeRouter] responses: step=upstream_attempt err=%v idx=%d url=%s", lastErr, attempt, upstreamURL)
-			continue
-		}
-		utils.Logger.Printf("[ClaudeRouter] responses: step=upstream_attempt_done idx=%d status=%d content_type=%s url=%s", attempt, resp.StatusCode, resp.Header.Get("Content-Type"), upstreamURL)
-
-		// 对不同网关做路径兜底：404 时尝试下一个候选 URL。
-		if resp.StatusCode == http.StatusNotFound && i < len(upstreamURLs)-1 {
-			preview, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
-			utils.Logger.Printf("[ClaudeRouter] responses: step=upstream_retry_on_404 idx=%d url=%s body_preview=%s", attempt, upstreamURL, debugBodySnippet(preview, 400))
-			_ = resp.Body.Close()
-			resp = nil
-			continue
-		}
-		break
-	}
-	if lastErr != nil || resp == nil {
-		if conversationID != "" && usedCache {
+		if conversationID != "" {
 			modelstate.ClearConversationModel(conversationID)
 		}
-		if targetModel != nil {
+		if shouldTemporarilyDisableResponsesModel(statusCode, execErr) {
 			modelstate.DisableModelTemporarily(targetModel.ID, modelstate.TemporaryModelDisableTTL)
 		}
 		// 写入错误日志
@@ -254,66 +167,58 @@ func (h *CodexProxyHandler) handleResponses(c *gin.Context) {
 		if u := middleware.CurrentUser(c); u != nil {
 			username = u.Username
 		}
-		errMsg := "upstream request failed"
-		if lastErr != nil {
-			errMsg = lastErr.Error()
+		_ = model.RecordErrorLog(targetModel.ID, username, statusCode, execErr.Error())
+		if statusCode >= 400 {
+			openaiErrorFromBody(c, statusCode, body)
+			return
 		}
-		_ = model.RecordErrorLog(targetID, username, 0, errMsg)
-		if lastErr != nil {
-			utils.Logger.Printf("[ClaudeRouter] responses: step=upstream_failed err=%v", lastErr)
-			c.JSON(http.StatusBadGateway, gin.H{"error": lastErr.Error()})
-		} else {
-			utils.Logger.Printf("[ClaudeRouter] responses: step=upstream_failed err=nil_response")
-			c.JSON(http.StatusBadGateway, gin.H{"error": "upstream request failed"})
+		openaiError(c, http.StatusBadGateway, "api_error", execErr.Error())
+		return
+	}
+
+	if c.Request.Context().Err() != nil {
+		if streamBody != nil {
+			_ = streamBody.Close()
 		}
 		return
 	}
 
-	stream := streamRequested
-	if v, ok := payloadToSend["stream"].(bool); ok {
-		stream = v
-	}
-	contentType := resp.Header.Get("Content-Type")
-	if strings.Contains(strings.ToLower(contentType), "text/event-stream") {
-		stream = true
-	}
-
-	if stream && resp.StatusCode >= 200 && resp.StatusCode < 300 {
-		utils.Logger.Printf("[ClaudeRouter] responses: step=proxy_stream status=%d content_type=%s", resp.StatusCode, contentType)
-		utils.ProxySSE(c, resp.Body)
-		return
-	}
-
-	defer resp.Body.Close()
-	body, _ := io.ReadAll(resp.Body)
-	if contentType == "" {
-		contentType = "application/json"
-	}
-
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		if conversationID != "" && usedCache {
+	if statusCode < 200 || statusCode >= 300 {
+		if conversationID != "" {
 			modelstate.ClearConversationModel(conversationID)
 		}
-		if targetModel != nil {
-			modelstate.DisableModelTemporarily(targetModel.ID, 15*time.Minute)
+		if shouldTemporarilyDisableResponsesModel(statusCode, nil) {
+			modelstate.DisableModelTemporarily(targetModel.ID, modelstate.TemporaryModelDisableTTL)
 		}
 		// 写入错误日志
 		username := ""
 		if u := middleware.CurrentUser(c); u != nil {
 			username = u.Username
 		}
-		_ = model.RecordErrorLog(targetID, username, resp.StatusCode, fmt.Sprintf("upstream error status=%d", resp.StatusCode))
-		utils.Logger.Printf("[ClaudeRouter] responses: step=upstream_error status=%d content_type=%s body_preview=%s",
-			resp.StatusCode, contentType, debugBodySnippet(body, 600))
-	} else {
-		utils.Logger.Printf("[ClaudeRouter] responses: step=upstream_success status=%d content_type=%s body_len=%d",
-			resp.StatusCode, contentType, len(body))
+		_ = model.RecordErrorLog(targetModel.ID, username, statusCode, fmt.Sprintf("upstream error status=%d", statusCode))
+		openaiErrorFromBody(c, statusCode, body)
+		return
 	}
 
-	c.Data(resp.StatusCode, contentType, body)
+	if stream && streamBody != nil {
+		defer streamBody.Close()
+		c.Header("Content-Type", "text/event-stream")
+		utils.ProxySSE(c, trackUsageStream(c, streamBody, targetModel.ID, requestedModel))
+		return
+	}
+
+	if usedCache {
+		utils.Logger.Debugf("[ClaudeRouter] responses: step=cached_model model=%s conversation=%s", targetModel.ID, conversationID)
+	}
+
+	if contentType == "" {
+		contentType = "application/json"
+	}
+	recordUsageFromBodyWithModel(c, body, targetModel.ID, requestedModel)
+	c.Data(statusCode, contentType, body)
 }
 
-func (h *CodexProxyHandler) resolveResponseTargetModel(requestedModel, conversationID, inputText string) (*model.Model, bool, error) {
+func resolveResponseTargetModel(requestedModel, conversationID, inputText string) (*model.Model, bool, error) {
 	// 1) 会话缓存优先（仅 combo 路由后写入）
 	if conversationID != "" {
 		if modelID, ok := modelstate.GetConversationModel(conversationID); ok {
@@ -1197,10 +1102,29 @@ func debugBodySnippet(body []byte, max int) string {
 
 var responsesVersionSuffixPattern = regexp.MustCompile(`/v\d+[a-z]*$`)
 
-func (h *CodexProxyHandler) resolveResponsesEndpoint(m *model.Model) (baseURL, apiKey string) {
+func shouldTemporarilyDisableResponsesModel(statusCode int, err error) bool {
+	if statusCode == http.StatusTooManyRequests || statusCode >= http.StatusInternalServerError {
+		return true
+	}
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) {
+		return true
+	}
+	return false
+}
+
+func (h *CodexProxyHandler) resolveResponsesEndpoint(m *model.Model) (interfaceType, baseURL, apiKey string, err error) {
+	interfaceType = "openai_responses"
 	if m != nil {
 		baseURL = strings.TrimSpace(m.BaseURL)
 		apiKey = strings.TrimSpace(m.APIKey)
+		interfaceType = strings.TrimSpace(m.Interface)
 	}
 
 	// 优先使用模型绑定的 operator 配置（如 iflow/newapi/codex）。
@@ -1231,7 +1155,87 @@ func (h *CodexProxyHandler) resolveResponsesEndpoint(m *model.Model) (baseURL, a
 	if baseURL == "" {
 		baseURL = codexDefaultBaseURL
 	}
-	return baseURL, apiKey
+	return interfaceType, baseURL, apiKey, nil
+}
+
+func (h *CodexProxyHandler) executeResponsesRequest(ctx context.Context, payload map[string]any, opts messages.ExecuteOptions, adapterMode string) (int, string, []byte, io.ReadCloser, error) {
+	switch {
+	case strings.HasPrefix(adapterMode, "adapt_"):
+		return executeResponsesViaSDKAdapter(ctx, payload, opts, adapterMode)
+	case strings.HasPrefix(adapterMode, "passthrough"):
+		return executeResponsesPassthrough(ctx, payload, opts)
+	default:
+		return http.StatusBadRequest, "application/json", nil, nil, fmt.Errorf("unsupported adapter_mode: %s", adapterMode)
+	}
+}
+
+func executeResponsesPassthrough(ctx context.Context, payload map[string]any, opts messages.ExecuteOptions) (int, string, []byte, io.ReadCloser, error) {
+	reqBody, err := json.Marshal(payload)
+	if err != nil {
+		return 0, "", nil, nil, fmt.Errorf("responses: marshal payload: %w", err)
+	}
+
+	upstreamURLs := buildResponsesUpstreamURLs(opts.BaseURL)
+	utils.Logger.Debugf("[ClaudeRouter] responses: passthrough urls=%v stream=%v", upstreamURLs, opts.Stream)
+
+	client := &http.Client{Timeout: 30 * time.Minute}
+
+	var resp *http.Response
+	var lastErr error
+	for i, upstreamURL := range upstreamURLs {
+		attempt := i + 1
+		utils.Logger.Debugf("[ClaudeRouter] responses: passthrough attempt idx=%d/%d url=%s", attempt, len(upstreamURLs), upstreamURL)
+
+		req, reqErr := http.NewRequestWithContext(ctx, http.MethodPost, upstreamURL, bytes.NewReader(reqBody))
+		if reqErr != nil {
+			lastErr = reqErr
+			break
+		}
+		req.Header.Set("Content-Type", "application/json")
+		if opts.Stream {
+			req.Header.Set("Accept", "text/event-stream")
+		} else {
+			req.Header.Set("Accept", "application/json")
+		}
+		if opts.APIKey != "" {
+			req.Header.Set("Authorization", "Bearer "+opts.APIKey)
+		}
+
+		resp, lastErr = client.Do(req)
+		if lastErr != nil {
+			continue
+		}
+
+		// 404 时尝试下一个候选 URL
+		if resp.StatusCode == http.StatusNotFound && i < len(upstreamURLs)-1 {
+			_ = resp.Body.Close()
+			resp = nil
+			continue
+		}
+		break
+	}
+
+	if lastErr != nil || resp == nil {
+		return 0, "", nil, nil, fmt.Errorf("responses: upstream request: %w", lastErr)
+	}
+
+	if opts.Stream && resp.StatusCode >= 200 && resp.StatusCode < 300 {
+		return resp.StatusCode, "text/event-stream", nil, resp.Body, nil
+	}
+
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+
+	bodyPreview := string(body)
+	if len(bodyPreview) > 2000 {
+		bodyPreview = bodyPreview[:2000] + "...(truncated)"
+	}
+	utils.Logger.Debugf("[ClaudeRouter] responses: passthrough upstream status=%d body=%s", resp.StatusCode, bodyPreview)
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return resp.StatusCode, resp.Header.Get("Content-Type"), body, nil, fmt.Errorf("responses: upstream error status=%d", resp.StatusCode)
+	}
+	return resp.StatusCode, "application/json", body, nil, nil
 }
 
 func buildResponsesUpstreamURLs(baseURL string) []string {
@@ -1276,55 +1280,32 @@ func buildResponsesUpstreamURLs(baseURL string) []string {
 
 func executeResponsesViaSDKAdapter(
 	ctx context.Context,
-	apiKey, baseURL, upstreamModel string,
-	responsesRequestRawJSON []byte,
-	streamRequested bool,
+	payload map[string]any,
+	opts messages.ExecuteOptions,
 	adapterMode string,
-) (statusCode int, contentType string, body []byte, streamBody io.ReadCloser) {
-	toFormat := sdktranslator.FormatOpenAI
-	switch adapterMode {
-	case "adapt_anthropic_sdk":
-		toFormat = sdktranslator.FormatClaude
-	case "adapt_openai_compatible_sdk":
-		toFormat = sdktranslator.FormatOpenAI
-	default:
-		b, _ := json.Marshal(gin.H{"error": "unsupported adapter mode"})
-		return http.StatusBadRequest, "application/json", b, nil
+) (statusCode int, contentType string, body []byte, streamBody io.ReadCloser, err error) {
+	originalReqRaw, translatedReqRaw, translateErr := messages.TranslateResponsesRequestForAdapter(payload, opts.UpstreamModel, opts.Stream, adapterMode)
+	if translateErr != nil {
+		return http.StatusBadRequest, "application/json", nil, nil, fmt.Errorf("responses: invalid translated request payload: %w", translateErr)
 	}
+	utils.Logger.Debugf("[ClaudeRouter] responses: step=sdk_translated_request mode=%s len=%d body=%s", adapterMode, len(translatedReqRaw), debugBodySnippet(translatedReqRaw, 500))
 
-	// 直接使用 sdktranslator 将 Responses 格式转换为目标格式
-	translatedReqRaw := sdktranslator.TranslateRequestByFormatName(
-		sdktranslator.FormatCodex,
-		toFormat,
-		upstreamModel,
-		responsesRequestRawJSON,
-		streamRequested,
-	)
-	utils.Logger.Printf("[ClaudeRouter] responses: step=sdk_translated_request mode=%s len=%d body=%s", adapterMode, len(translatedReqRaw), debugBodySnippet(translatedReqRaw, 500))
-	translatedReqRaw, err := normalizeSDKTranslatedRequestPayload(translatedReqRaw, upstreamModel, streamRequested, adapterMode)
-	if err != nil {
-		b, _ := json.Marshal(gin.H{"error": "invalid translated request payload"})
-		return http.StatusBadRequest, "application/json", b, nil
-	}
+	upstreamURL, reqHeaders := buildSDKUpstreamRequest(opts.BaseURL, opts.APIKey, adapterMode)
+	utils.Logger.Debugf("[ClaudeRouter] responses: step=sdk_dispatch mode=%s upstream_url=%s model=%s stream=%v api_key_set=%v",
+		adapterMode, upstreamURL, opts.UpstreamModel, opts.Stream, strings.TrimSpace(opts.APIKey) != "")
 
-	upstreamURL, reqHeaders := buildSDKUpstreamRequest(baseURL, apiKey, adapterMode)
-	utils.Logger.Printf("[ClaudeRouter] responses: step=sdk_dispatch mode=%s upstream_url=%s model=%s stream=%v api_key_set=%v",
-		adapterMode, upstreamURL, upstreamModel, streamRequested, strings.TrimSpace(apiKey) != "")
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, upstreamURL, bytes.NewReader(translatedReqRaw))
-	if err != nil {
-		b, _ := json.Marshal(gin.H{"error": "failed to create upstream request"})
-		return http.StatusBadGateway, "application/json", b, nil
+	req, reqErr := http.NewRequestWithContext(ctx, http.MethodPost, upstreamURL, bytes.NewReader(translatedReqRaw))
+	if reqErr != nil {
+		return 0, "", nil, nil, fmt.Errorf("responses: create request: %w", reqErr)
 	}
 	for k, v := range reqHeaders {
 		req.Header.Set(k, v)
 	}
 
 	client := &http.Client{Timeout: 30 * time.Minute}
-	resp, err := client.Do(req)
-	if err != nil {
-		b, _ := json.Marshal(gin.H{"error": err.Error()})
-		return http.StatusBadGateway, "application/json", b, nil
+	resp, respErr := client.Do(req)
+	if respErr != nil {
+		return 0, "", nil, nil, fmt.Errorf("responses: upstream request: %w", respErr)
 	}
 
 	statusCode = resp.StatusCode
@@ -1339,71 +1320,44 @@ func executeResponsesViaSDKAdapter(
 		if len(body) == 0 {
 			body, _ = json.Marshal(gin.H{"error": fmt.Sprintf("upstream error status=%d", statusCode)})
 		}
-		return statusCode, contentType, body, nil
+		return statusCode, contentType, body, nil, fmt.Errorf("responses: upstream error status=%d", statusCode)
 	}
 
-	if streamRequested {
+	if opts.Stream {
 		pr, pw := io.Pipe()
 		go func() {
 			defer pw.Close()
 			defer resp.Body.Close()
-			proxySDKStreamAsResponses(ctx, resp.Body, pw, upstreamModel, responsesRequestRawJSON, translatedReqRaw, adapterMode)
+			proxySDKStreamAsResponses(ctx, resp.Body, pw, opts.UpstreamModel, originalReqRaw, translatedReqRaw, adapterMode)
 		}()
-		return statusCode, "text/event-stream", nil, pr
+		return statusCode, "text/event-stream", nil, pr, nil
 	}
 
 	defer resp.Body.Close()
-	respBodyRaw, err := readSDKNonStreamResponseBody(resp.Body, adapterMode)
-	if err != nil {
-		b, _ := json.Marshal(gin.H{"error": err.Error()})
-		return http.StatusBadGateway, "application/json", b, nil
+	respBodyRaw, readErr := readSDKNonStreamResponseBody(resp.Body)
+	if readErr != nil {
+		return 0, "", nil, nil, fmt.Errorf("responses: read response body: %w", readErr)
 	}
+	utils.Logger.Infof("[ClaudeRouter] responses: step=sdk_upstream_response mode=%s model=%s len=%d body=%s",
+		adapterMode, opts.UpstreamModel, len(respBodyRaw), debugBodySnippet(respBodyRaw, 2000))
 
-	// 直接使用 sdktranslator 将目标格式转换为 Responses 格式
-	var param any
-	responsesRespRaw := sdktranslator.TranslateNonStreamByFormatName(
+	responsesRespRaw, translateRespErr := messages.TranslateResponsesNonStreamForClient(
 		ctx,
-		toFormat,
-		sdktranslator.FormatCodex,
-		upstreamModel,
-		responsesRequestRawJSON,
+		adapterMode,
+		opts.UpstreamModel,
+		originalReqRaw,
 		translatedReqRaw,
 		respBodyRaw,
-		&param,
 	)
-	if strings.TrimSpace(responsesRespRaw) == "" {
-		b, _ := json.Marshal(gin.H{"error": "translated responses response is empty"})
-		return http.StatusBadGateway, "application/json", b, nil
+	if translateRespErr != nil {
+		utils.Logger.Errorf("[ClaudeRouter] responses: step=sdk_response_translate_error mode=%s model=%s upstream_body=%s err=%v",
+			adapterMode, opts.UpstreamModel, debugBodySnippet(respBodyRaw, 2000), translateRespErr)
+		return http.StatusBadGateway, "application/json", nil, nil, fmt.Errorf("responses: %w", translateRespErr)
 	}
+	utils.Logger.Infof("[ClaudeRouter] responses: step=sdk_translated_response mode=%s model=%s len=%d body=%s",
+		adapterMode, opts.UpstreamModel, len(responsesRespRaw), debugBodySnippet(responsesRespRaw, 2000))
 
-	return statusCode, "application/json", []byte(responsesRespRaw), nil
-}
-
-func normalizeSDKTranslatedRequestPayload(raw []byte, upstreamModel string, streamRequested bool, adapterMode string) ([]byte, error) {
-	payload := map[string]any{}
-	if len(bytes.TrimSpace(raw)) > 0 {
-		if err := json.Unmarshal(raw, &payload); err != nil {
-			return nil, err
-		}
-	}
-	if payload == nil {
-		payload = map[string]any{}
-	}
-
-	if strings.TrimSpace(upstreamModel) != "" {
-		payload["model"] = strings.TrimSpace(upstreamModel)
-	}
-
-	switch adapterMode {
-	case "adapt_anthropic_sdk":
-		payload["stream"] = streamRequested
-	case "adapt_openai_compatible_sdk":
-		payload["stream"] = streamRequested
-		if _, ok := payload["messages"]; !ok {
-			payload["messages"] = []any{}
-		}
-	}
-	return json.Marshal(payload)
+	return statusCode, "application/json", responsesRespRaw, nil, nil
 }
 
 func buildSDKUpstreamRequest(baseURL, apiKey, adapterMode string) (string, map[string]string) {
@@ -1481,14 +1435,7 @@ func normalizeOpenAICompatibleSDKBaseURL(baseURL string) string {
 	return base + "/v1"
 }
 
-func readSDKNonStreamResponseBody(reader io.Reader, adapterMode string) ([]byte, error) {
-	if adapterMode == "adapt_openai_compatible_sdk" {
-		b, err := io.ReadAll(reader)
-		if err != nil {
-			return nil, err
-		}
-		return b, nil
-	}
+func readSDKNonStreamResponseBody(reader io.Reader) ([]byte, error) {
 	return io.ReadAll(reader)
 }
 
@@ -1519,40 +1466,70 @@ func proxySDKStreamAsResponses(
 		if !bytes.HasPrefix(line, []byte("data:")) {
 			continue
 		}
+		utils.Logger.Infof("[ClaudeRouter] responses: step=sdk_stream_upstream_chunk mode=%s model=%s chunk=%s",
+			adapterMode, model, debugBodySnippet(line, 500))
 
-		var fromFormat sdktranslator.Format
-		switch adapterMode {
-		case "adapt_anthropic_sdk":
-			fromFormat = sdktranslator.FormatClaude
-		default:
-			fromFormat = sdktranslator.FormatOpenAI
-		}
-		// 直接使用 sdktranslator 将流式响应转换为 Responses 格式
-		chunks := sdktranslator.TranslateStreamByFormatName(
+		chunks, err := messages.TranslateResponsesStreamChunkForClient(
 			ctx,
-			fromFormat,
-			sdktranslator.FormatCodex,
+			adapterMode,
 			model,
 			originalRequestRawJSON,
 			translatedRequestRawJSON,
 			bytes.Clone(line),
 			&state,
 		)
+		if err != nil {
+			utils.Logger.Errorf("[ClaudeRouter] responses: step=sdk_stream_translate_error err=%v", err)
+			continue
+		}
 		for _, chunk := range chunks {
 			if strings.TrimSpace(chunk) == "" {
 				continue
 			}
-			_, _ = writer.WriteString(chunk)
+			normalizedChunk := normalizeResponsesSSEChunk(chunk)
+			utils.Logger.Infof("[ClaudeRouter] responses: step=sdk_stream_translated_chunk mode=%s model=%s chunk=%s",
+				adapterMode, model, debugBodySnippet([]byte(normalizedChunk), 500))
+			_, _ = writer.WriteString(normalizedChunk)
 			_ = writer.Flush()
 		}
 	}
 
 	if scanner.Err() != nil {
-		utils.Logger.Printf("[ClaudeRouter] responses: step=sdk_stream_scan_error err=%v", scanner.Err())
+		utils.Logger.Errorf("[ClaudeRouter] responses: step=sdk_stream_scan_error err=%v", scanner.Err())
 	}
-	// 发送结束信号
 	_, _ = writer.WriteString("data: [DONE]\n\n")
 	_ = writer.Flush()
+}
+
+func normalizeResponsesSSEChunk(chunk string) string {
+	normalized := strings.ReplaceAll(chunk, "\r\n", "\n")
+	normalized = strings.ReplaceAll(normalized, "\r", "\n")
+	normalized = strings.ReplaceAll(normalized, "}event:", "}\n\nevent:")
+	normalized = strings.ReplaceAll(normalized, "]event:", "]\n\nevent:")
+	normalized = strings.ReplaceAll(normalized, "}data:", "}\n\ndata:")
+	normalized = strings.ReplaceAll(normalized, "]data:", "]\n\ndata:")
+
+	lines := strings.Split(normalized, "\n")
+	out := make([]string, 0, len(lines)+2)
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			out = append(out, "")
+			continue
+		}
+		if strings.HasPrefix(line, "event:") && strings.Contains(line, " data:") {
+			idx := strings.Index(line, " data:")
+			out = append(out, strings.TrimSpace(line[:idx]))
+			out = append(out, strings.TrimSpace(line[idx+1:]))
+			out = append(out, "")
+			continue
+		}
+		out = append(out, line)
+	}
+
+	normalized = strings.Join(out, "\n")
+	normalized = strings.TrimRight(normalized, "\n")
+	return normalized + "\n\n"
 }
 
 func copyRequestHeaders(src http.Header, dst http.Header) {

@@ -11,8 +11,8 @@ import (
 
 // CleanupOldLogs 删除7天前的使用日志
 func CleanupOldLogs() error {
-	// 计算7天前的时间
-	sevenDaysAgo := time.Now().AddDate(0, 0, -7)
+	// 计算1天前的时间
+	sevenDaysAgo := time.Now().AddDate(0, 0, -1)
 
 	result := storage.DB.Where("created_at < ?", sevenDaysAgo).Delete(&model.UsageLog{})
 	if result.Error != nil {

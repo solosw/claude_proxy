@@ -20,7 +20,8 @@ type OperatorEndpoint struct {
 // Config 定义了应用的顶层配置结构，对应 configs/config.yaml。
 type Config struct {
 	Server struct {
-		Addr string `yaml:"addr"`
+		Addr  string `yaml:"addr"`
+		Debug bool   `yaml:"debug"`
 	} `yaml:"server"`
 
 	Log struct {

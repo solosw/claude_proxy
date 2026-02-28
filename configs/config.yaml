@@ -1,9 +1,10 @@
 server:
   addr: "localhost:8090"
+  debug: false
 gui:
   enabled: false
 log:
-  level: info
+  level: debug
 
 database:
   driver: sqlite # sqlite 或 mysql

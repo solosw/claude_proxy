@@ -12,6 +12,7 @@ const isEdit = ref(false);
 const form = reactive({
   id: '',
   name: '',
+  provider: '',
   description: '',
   enabled: true,
   items: [],
@@ -45,6 +46,7 @@ const openCreate = () => {
   Object.assign(form, {
     id: '',
     name: '',
+    provider: '',
     description: '',
     enabled: true,
     items: [],
@@ -145,7 +147,8 @@ onMounted(loadData);
       style="width: 100%"
     >
       <el-table-column prop="id" label="ID" width="220" />
-      <el-table-column prop="name" label="名称" width="200" />
+      <el-table-column prop="name" label="名称" width="180" />
+      <el-table-column prop="provider" label="提供商" width="120" />
       <el-table-column prop="enabled" label="启用" width="100">
         <template #default="{ row }">
           <el-tag :type="row.enabled ? 'success' : 'info'">
@@ -184,6 +187,9 @@ onMounted(loadData);
         </el-form-item>
         <el-form-item label="名称">
           <el-input v-model="form.name" />
+        </el-form-item>
+        <el-form-item label="提供商">
+          <el-input v-model="form.provider" placeholder="例如: custom, openai" />
         </el-form-item>
         <el-form-item label="描述">
           <el-input

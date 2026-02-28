@@ -37,6 +37,187 @@ const formRules = {
 
 const formRef = ref();
 
+// --------- Batch Import ----------
+const importDialogVisible = ref(false);
+const importJsonText = ref('');
+const importLoading = ref(false);
+const importPreview = ref([]);
+const importErrors = ref([]);
+
+const openImport = () => {
+  importJsonText.value = '';
+  importPreview.value = [];
+  importErrors.value = [];
+  importDialogVisible.value = true;
+};
+
+const parseImportJson = () => {
+  importErrors.value = [];
+  importPreview.value = [];
+
+  if (!importJsonText.value.trim()) {
+    importErrors.value.push('JSON 内容不能为空');
+    return;
+  }
+
+  let parsed;
+  try {
+    parsed = JSON.parse(importJsonText.value);
+  } catch (e) {
+    importErrors.value.push(`JSON 解析失败: ${e.message}`);
+    return;
+  }
+
+  if (!Array.isArray(parsed)) {
+    importErrors.value.push('JSON 必须是数组格式');
+    return;
+  }
+
+  if (parsed.length === 0) {
+    importErrors.value.push('数组不能为空');
+    return;
+  }
+
+  // 验证每个模型
+  const requiredFields = ['id', 'name', 'provider', 'upstream_id'];
+  parsed.forEach((item, index) => {
+    const errors = [];
+    requiredFields.forEach(field => {
+      if (!item[field] || String(item[field]).trim() === '') {
+        errors.push(`缺少必填字段: ${field}`);
+      }
+    });
+    if (errors.length > 0) {
+      importErrors.value.push(`第 ${index + 1} 个模型: ${errors.join(', ')}`);
+    } else {
+      importPreview.value.push({
+        index: index + 1,
+        id: item.id,
+        name: item.name,
+        provider: item.provider,
+        interface_type: item.interface_type || 'openai',
+        upstream_id: item.upstream_id,
+      });
+    }
+  });
+};
+
+const submitBatchImport = async () => {
+  // if (importErrors.value.length > 0 || importPreview.value.length === 0) {
+  //   ElMessage.warning('请先修复 JSON 错误');
+  //   return;
+  // }
+
+  let parsed;
+  try {
+    parsed = JSON.parse(importJsonText.value);
+  } catch {
+    ElMessage.error('JSON 解析失败');
+    return;
+  }
+
+  importLoading.value = true;
+  let successCount = 0;
+  let failCount = 0;
+  const failMessages = [];
+
+  for (const item of parsed) {
+    // 跳过验证失败的
+    const hasError = importErrors.value.some(e => e.includes(`ID: ${item.id}`) || e.includes(`name: ${item.name}`));
+    if (hasError) {
+      failCount++;
+      continue;
+    }
+
+    try {
+      await axios.post('/api/models', {
+        id: item.id,
+        name: item.name,
+        provider: item.provider,
+        interface_type: item.interface_type || 'openai',
+        upstream_id: item.upstream_id,
+        api_key: item.api_key || '',
+        base_url: item.base_url || '',
+        description: item.description || '',
+        enabled: item.enabled !== false,
+        forward_metadata: item.forward_metadata === true,
+        forward_thinking: item.forward_thinking === true,
+        max_qps: item.max_qps || 0,
+        operator_id: item.operator_id || '',
+        response_format: item.response_format || '',
+        input_price: item.input_price || 0,
+        output_price: item.output_price || 0,
+      });
+      successCount++;
+    } catch (e) {
+      failCount++;
+      failMessages.push(`${item.name || item.id}: ${e.response?.data?.error || e.message}`);
+    }
+  }
+
+  importLoading.value = false;
+
+  if (successCount > 0) {
+    ElMessage.success(`成功导入 ${successCount} 个模型${failCount > 0 ? `，失败 ${failCount} 个` : ''}`);
+  } else {
+    ElMessage.error(`导入失败: ${failMessages[0] || '未知错误'}`);
+  }
+
+  if (successCount > 0) {
+    importDialogVisible.value = false;
+    await loadModels();
+  }
+};
+
+const downloadTemplate = () => {
+  const template = [
+    {
+      id: "my-gpt-4",
+      name: "我的 GPT-4",
+      provider: "openai",
+      interface_type: "openai",
+      upstream_id: "gpt-4",
+      api_key: "",
+      base_url: "",
+      description: "示例模型描述",
+      enabled: true,
+      forward_metadata: false,
+      forward_thinking: false,
+      max_qps: 10,
+      operator_id: "",
+      response_format: "",
+      input_price: 1.0,
+      output_price: 3.0
+    },
+    {
+      id: "my-claude-3",
+      name: "我的 Claude-3",
+      provider: "anthropic",
+      interface_type: "anthropic",
+      upstream_id: "claude-3-5-sonnet-20241022",
+      api_key: "",
+      base_url: "",
+      description: "示例模型描述",
+      enabled: true,
+      forward_metadata: false,
+      forward_thinking: false,
+      max_qps: 5,
+      operator_id: "",
+      response_format: "",
+      input_price: 1.5,
+      output_price: 5.0
+    }
+  ];
+
+  const blob = new Blob([JSON.stringify(template, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'models_template.json';
+  a.click();
+  URL.revokeObjectURL(url);
+};
+
 const loadModels = async () => {
   loading.value = true;
   try {
@@ -315,9 +496,14 @@ onMounted(() => {
   <div class="p-6">
     <div class="flex items-center justify-between mb-4">
       <h2 class="text-xl font-semibold">模型管理</h2>
-      <el-button type="primary" @click="openCreate">
-        新建模型
-      </el-button>
+      <div class="flex gap-2">
+        <el-button type="success" @click="openImport">
+          批量导入
+        </el-button>
+        <el-button type="primary" @click="openCreate">
+          新建模型
+        </el-button>
+      </div>
     </div>
 
     <el-table
@@ -552,12 +738,106 @@ onMounted(() => {
         </div>
       </div>
     </el-drawer>
+
+    <!-- 批量导入对话框 -->
+    <el-dialog
+      v-model="importDialogVisible"
+      title="批量导入模型"
+      width="720px"
+      :close-on-click-modal="false"
+    >
+      <div class="import-container">
+        <div class="import-header">
+          <el-button type="primary" size="small" @click="downloadTemplate">
+            下载模板
+          </el-button>
+          <el-button type="info" size="small" @click="parseImportJson">
+            预览
+          </el-button>
+        </div>
+
+        <el-input
+          v-model="importJsonText"
+          type="textarea"
+          :rows="12"
+          placeholder="粘贴 JSON 数组..."
+          font-family="monospace"
+        />
+
+        <!-- 错误提示 -->
+        <div v-if="importErrors.length > 0" class="import-errors">
+          <el-alert
+            v-for="(err, idx) in importErrors"
+            :key="idx"
+            :title="err"
+            type="error"
+            :closable="false"
+            show-icon
+          />
+        </div>
+
+        <!-- 预览表格 -->
+        <div v-if="importPreview.length > 0 && importErrors.length === 0" class="import-preview">
+          <div class="preview-title">预览 ({{ importPreview.length }} 个模型)</div>
+          <el-table :data="importPreview" size="small" max-height="200">
+            <el-table-column prop="index" label="#" width="50" />
+            <el-table-column prop="id" label="ID" width="180" />
+            <el-table-column prop="name" label="名称" width="140" />
+            <el-table-column prop="provider" label="服务商" width="100" />
+            <el-table-column prop="interface_type" label="接口类型" width="140" />
+            <el-table-column prop="upstream_id" label="上游模型" />
+          </el-table>
+        </div>
+      </div>
+
+      <template #footer>
+        <span class="dialog-footer">
+          <el-button @click="importDialogVisible = false">取 消</el-button>
+          <el-button
+            type="primary"
+            :loading="importLoading"
+
+            @click="submitBatchImport"
+          >
+            确认导入
+          </el-button>
+        </span>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
 <style scoped>
 .p-6 {
   animation: fadeInUp 0.6s ease-out;
+}
+
+.import-container {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.import-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.import-errors {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.import-preview {
+  margin-top: 8px;
+}
+
+.preview-title {
+  font-weight: 600;
+  margin-bottom: 12px;
+  color: #303133;
 }
 
 .dialog-footer {

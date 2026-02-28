@@ -1,36 +1,20 @@
-{
-  "FixedFileInfo": {
-    "FileVersion": {
-      "Major": 1,
-      "Minor": 0,
-      "Patch": 0,
-      "Build": 0
-    },
-    "ProductVersion": {
-      "Major": 1,
-      "Minor": 0,
-      "Patch": 0,
-      "Build": 0
-    }
-  },
-  "StringFileInfo": {
-    "040904b0": {
-      "CompanyName": "ApiRouter",
-      "FileDescription": "ApiRouter",
-      "FileVersion": "1.0.0.0",
-      "InternalName": "ApiRouter",
-      "LegalCopyright": "© 2026 Your Name",
-      "OriginalFilename": "main.exe",
-      "ProductName": "ApiRouter",
-      "ProductVersion": "1.0.0.0"
-    }
-  },
-  "VarFileInfo": {
-    "Translation": {
-      "LangID": "0409",
-      "CharsetID": "04b0"
-    }
-  },
-  "IconPath": "./public/web/logo.ico",
-  "ManifestPath": ""
-}
+[
+  {
+    "id": "my-gpt-4",
+    "name": "我的 GPT-4",
+    "provider": "openai",
+    "interface_type": "openai",
+    "upstream_id": "gpt-4",
+    "api_key": "",
+    "base_url": "",
+    "description": "模型描述",
+    "enabled": true,
+    "forward_metadata": false,
+    "forward_thinking": false,
+    "max_qps": 10,
+    "operator_id": "",
+    "response_format": "",
+    "input_price": 1.0,
+    "output_price": 3.0
+  }
+]

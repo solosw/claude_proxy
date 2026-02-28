@@ -2,6 +2,7 @@ package handler
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"github.com/gin-gonic/gin"
@@ -115,17 +116,17 @@ func (h *MessagesHandler) handleMessages(c *gin.Context) {
 	if len(ua) > 80 {
 		ua = ua[:80] + "..."
 	}
-	utils.Logger.Printf("[ClaudeRouter] messages: request path=%s remote=%s user_agent=%s", c.Request.URL.Path, c.ClientIP(), ua)
+	utils.Logger.Debugf("[ClaudeRouter] messages: request path=%s remote=%s user_agent=%s", c.Request.URL.Path, c.ClientIP(), ua)
 	raw, err := c.GetRawData()
 	if err != nil {
-		utils.Logger.Printf("[ClaudeRouter] messages: step=read_body err=%v", err)
+		utils.Logger.Errorf("[ClaudeRouter] messages: step=read_body err=%v", err)
 		anthropicError(c, http.StatusBadRequest, "invalid_request_error", "Failed to read body")
 		return
 	}
 
 	var payload map[string]any
 	if err := json.Unmarshal(raw, &payload); err != nil {
-		utils.Logger.Printf("[ClaudeRouter] messages: step=parse_json err=%v", err)
+		utils.Logger.Errorf("[ClaudeRouter] messages: step=parse_json err=%v", err)
 		anthropicError(c, http.StatusBadRequest, "invalid_request_error", "Invalid JSON")
 		return
 	}
@@ -141,14 +142,14 @@ func (h *MessagesHandler) handleMessages(c *gin.Context) {
 			cachedModelID = modelID
 			requestedModel = cachedModelID
 			c.Set("real_conversation_id", conversationID)
-			utils.Logger.Printf("[ClaudeRouter] messages: step=conversation_model cached user_id=%s model=%s", conversationID, requestedModel)
+			utils.Logger.Debugf("[ClaudeRouter] messages: step=conversation_model cached user_id=%s model=%s", conversationID, requestedModel)
 
 		}
 
 	}
 
 	if requestedModel == "" {
-		utils.Logger.Printf("[ClaudeRouter] messages: step=validate missing model")
+		utils.Logger.Warnf("[ClaudeRouter] messages: step=validate missing model")
 		anthropicError(c, http.StatusBadRequest, "invalid_request_error", "Missing model")
 		return
 	}
@@ -166,7 +167,7 @@ func (h *MessagesHandler) handleMessages(c *gin.Context) {
 	if v, ok := payload["stream"].(bool); ok {
 		stream = v
 	}
-	utils.Logger.Printf("[ClaudeRouter] messages: step=resolve_model requested=%s stream=%v", requestedModel, stream)
+	utils.Logger.Debugf("[ClaudeRouter] messages: step=resolve_model requested=%s stream=%v", requestedModel, stream)
 
 	inputText := extractAnthropicInputText(payload)
 	var targetModel *model.Model
@@ -175,33 +176,33 @@ func (h *MessagesHandler) handleMessages(c *gin.Context) {
 		// 同一对话后续请求：直接用缓存的模型 id 取模型，不再查 combo
 		m, err := model.GetModel(requestedModel)
 		if err != nil {
-			utils.Logger.Printf("[ClaudeRouter] messages: step=resolve_model err=cached_model_gone model=%s", requestedModel)
+			utils.Logger.Warnf("[ClaudeRouter] messages: step=resolve_model err=cached_model_gone model=%s", requestedModel)
 			anthropicError(c, http.StatusNotFound, "not_found_error", "Unknown model: "+requestedModel)
 
 			return
 		}
 		if modelstate.IsModelTemporarilyDisabled(m.ID) {
-			utils.Logger.Printf("[ClaudeRouter] messages: step=resolve_model err=model_temp_disabled model=%s", m.ID)
+			utils.Logger.Warnf("[ClaudeRouter] messages: step=resolve_model err=model_temp_disabled model=%s", m.ID)
 			anthropicError(c, http.StatusBadRequest, "invalid_request_error", "Model temporarily disabled: "+m.ID)
 			return
 		}
 		targetModel = m
-		utils.Logger.Printf("[ClaudeRouter] messages: step=resolve_model using_cached model=%s", targetModel.ID)
+		utils.Logger.Debugf("[ClaudeRouter] messages: step=resolve_model using_cached model=%s", targetModel.ID)
 	} else {
 		// 对话首条：requestedModel 必须是 combo id，智能选模型后缓存
 		if !model.IsComboID(requestedModel) {
-			utils.Logger.Printf("[ClaudeRouter] messages: step=resolve_model err=unknown_model model=%s", requestedModel)
+			utils.Logger.Warnf("[ClaudeRouter] messages: step=resolve_model err=unknown_model model=%s", requestedModel)
 			anthropicError(c, http.StatusNotFound, "not_found_error", "Unknown model: "+requestedModel)
 			return
 		}
 		cb, cbErr := model.GetCombo(requestedModel)
 		if cbErr != nil || cb == nil {
-			utils.Logger.Printf("[ClaudeRouter] messages: step=resolve_model err=combo_not_found model=%s", requestedModel)
+			utils.Logger.Warnf("[ClaudeRouter] messages: step=resolve_model err=combo_not_found model=%s", requestedModel)
 			anthropicError(c, http.StatusNotFound, "not_found_error", "Unknown model: "+requestedModel)
 			return
 		}
 		if !cb.Enabled {
-			utils.Logger.Printf("[ClaudeRouter] messages: step=resolve_model err=combo_disabled model=%s", requestedModel)
+			utils.Logger.Warnf("[ClaudeRouter] messages: step=resolve_model err=combo_disabled model=%s", requestedModel)
 			anthropicError(c, http.StatusBadRequest, "invalid_request_error", "Model disabled: "+requestedModel)
 			return
 		}
@@ -220,7 +221,7 @@ func (h *MessagesHandler) handleMessages(c *gin.Context) {
 			filtered = append(filtered, it)
 		}
 		if len(filtered) == 0 {
-			utils.Logger.Printf("[ClaudeRouter] messages: step=resolve_model err=no_available_models combo=%s", requestedModel)
+			utils.Logger.Warnf("[ClaudeRouter] messages: step=resolve_model err=no_available_models combo=%s", requestedModel)
 			anthropicError(c, http.StatusBadRequest, "invalid_request_error", "Combo has no available models")
 			return
 		}
@@ -238,7 +239,7 @@ func (h *MessagesHandler) handleMessages(c *gin.Context) {
 			return
 		}
 		targetModel = m
-		utils.Logger.Printf("[ClaudeRouter] messages: step=resolve_model combo chosen=%s", chosenID)
+		utils.Logger.Debugf("[ClaudeRouter] messages: step=resolve_model combo chosen=%s", chosenID)
 		if conversationID != "" {
 			modelstate.SetConversationModel(conversationID, targetModel.ID)
 			c.Set("real_conversation_id", conversationID)
@@ -250,7 +251,7 @@ func (h *MessagesHandler) handleMessages(c *gin.Context) {
 		return
 	}
 	if modelstate.IsModelTemporarilyDisabled(targetModel.ID) {
-		utils.Logger.Printf("[ClaudeRouter] messages: step=resolve_model err=model_temp_disabled model=%s", targetModel.ID)
+		utils.Logger.Warnf("[ClaudeRouter] messages: step=resolve_model err=model_temp_disabled model=%s", targetModel.ID)
 		anthropicError(c, http.StatusBadRequest, "invalid_request_error", "Model temporarily disabled: "+targetModel.ID)
 		return
 	}
@@ -267,13 +268,13 @@ func (h *MessagesHandler) handleMessages(c *gin.Context) {
 	// 若模型归属运营商，仅使用该运营商的转发逻辑；BaseURL/APIKey 优先用模型自身的，缺省时才用运营商配置
 	if operatorID := strings.TrimSpace(targetModel.OperatorID); operatorID != "" {
 		if h.cfg == nil || h.cfg.Operators == nil {
-			utils.Logger.Printf("[ClaudeRouter] messages: step=operator err=no_config operator=%s", operatorID)
+			utils.Logger.Warnf("[ClaudeRouter] messages: step=operator err=no_config operator=%s", operatorID)
 			anthropicError(c, http.StatusBadRequest, "invalid_request_error", "Operator config not available")
 			return
 		}
 		ep, ok := h.cfg.Operators[operatorID]
 		if !ok {
-			utils.Logger.Printf("[ClaudeRouter] messages: step=operator err=not_found operator=%s", operatorID)
+			utils.Logger.Warnf("[ClaudeRouter] messages: step=operator err=not_found operator=%s", operatorID)
 			anthropicError(c, http.StatusBadRequest, "invalid_request_error", "Operator not found: "+operatorID)
 			return
 		}
@@ -290,7 +291,7 @@ func (h *MessagesHandler) handleMessages(c *gin.Context) {
 		if t := strings.TrimSpace(ep.Interface); t != "" {
 			interfaceType = t
 		}
-		utils.Logger.Printf("[ClaudeRouter] messages: step=operator using operator=%s (forwarding only, url/key from model when set)", operatorID)
+		utils.Logger.Debugf("[ClaudeRouter] messages: step=operator using operator=%s (forwarding only, url/key from model when set)", operatorID)
 	}
 	if interfaceType == "" {
 		interfaceType = "anthropic"
@@ -314,7 +315,7 @@ func (h *MessagesHandler) handleMessages(c *gin.Context) {
 	if cachedModelID == "" && requestedModel != targetModel.ID {
 		// 首次请求：requestedModel 是 combo ID，需要替换为实际的 targetModel.ID
 		payloadToSend["model"] = targetModel.ID
-		utils.Logger.Printf("[ClaudeRouter] messages: step=replace_model_in_payload from=%s to=%s", requestedModel, targetModel.ID)
+		utils.Logger.Debugf("[ClaudeRouter] messages: step=replace_model_in_payload from=%s to=%s", requestedModel, targetModel.ID)
 	} else if cachedModelID != "" {
 		// 后续请求：requestedModel 已经是缓存的模型 ID，保持不变
 		payloadToSend["model"] = targetModel.ID
@@ -322,15 +323,15 @@ func (h *MessagesHandler) handleMessages(c *gin.Context) {
 
 	// 调试输出：Anthropic 转换后的消息
 	if payloadJSON, err := json.Marshal(payloadToSend); err == nil {
-		utils.Logger.Printf("[ClaudeRouter] messages: payload_to_send=%s", string(payloadJSON))
+		utils.Logger.Debugf("[ClaudeRouter] messages: payload_to_send=%s", string(payloadJSON))
 	} else {
-		utils.Logger.Printf("[ClaudeRouter] messages: payload_to_send marshal err=%v", err)
+		utils.Logger.Errorf("[ClaudeRouter] messages: payload_to_send marshal err=%v", err)
 	}
 
 	// 按模型配置的 QPS 限流
 	waitModelQPS(c.Request.Context(), targetModel.ID, targetModel.MaxQPS)
 	if c.Request.Context().Err() != nil {
-		utils.Logger.Printf("[ClaudeRouter] messages: client_gone during qps wait")
+		utils.Logger.Debugf("[ClaudeRouter] messages: client_gone during qps wait")
 		return
 	}
 
@@ -351,38 +352,38 @@ func (h *MessagesHandler) handleMessages(c *gin.Context) {
 	if operatorID != "" {
 		strategy := messages.OperatorRegistry.Get(operatorID)
 		if strategy == nil {
-			utils.Logger.Printf("[ClaudeRouter] messages: step=operator err=strategy_not_registered operator=%s", operatorID)
+			utils.Logger.Warnf("[ClaudeRouter] messages: step=operator err=strategy_not_registered operator=%s", operatorID)
 			anthropicError(c, http.StatusBadRequest, "invalid_request_error", "Operator strategy not registered: "+operatorID)
 			return
 		}
 		if strings.EqualFold(operatorID, "codex") {
-			utils.Logger.Printf("[ClaudeRouter] messages: step=execute_call operator=%s mode=sdk_translator_claude_to_codex", operatorID)
+			utils.Logger.Debugf("[ClaudeRouter] messages: step=execute_call operator=%s mode=sdk_translator_claude_to_codex", operatorID)
 		} else {
-			utils.Logger.Printf("[ClaudeRouter] messages: step=execute_call operator=%s", operatorID)
+			utils.Logger.Debugf("[ClaudeRouter] messages: step=execute_call operator=%s", operatorID)
 		}
 		statusCode, contentType, body, streamBody, err = strategy.Execute(c.Request.Context(), payloadToSend, opts)
 	} else {
 		adapter := messages.Registry.GetOrDefault(interfaceType)
 		if adapter == nil {
-			utils.Logger.Printf("[ClaudeRouter] messages: step=adapter err=unsupported type=%s", interfaceType)
+			utils.Logger.Warnf("[ClaudeRouter] messages: step=adapter err=unsupported type=%s", interfaceType)
 			anthropicError(c, http.StatusBadRequest, "invalid_request_error", "Unsupported interface_type: "+interfaceType)
 			return
 		}
 		if strings.EqualFold(interfaceType, "openai_compatible") {
-			utils.Logger.Printf("[ClaudeRouter] messages: step=execute_call adapter=%s mode=sdk_translator_claude_to_openai upstream_model=%s", interfaceType, upstreamID)
+			utils.Logger.Debugf("[ClaudeRouter] messages: step=execute_call adapter=%s mode=sdk_translator_claude_to_openai upstream_model=%s", interfaceType, upstreamID)
 		} else {
-			utils.Logger.Printf("[ClaudeRouter] messages: step=execute_call adapter=%s upstream_model=%s", interfaceType, upstreamID)
+			utils.Logger.Debugf("[ClaudeRouter] messages: step=execute_call adapter=%s upstream_model=%s", interfaceType, upstreamID)
 		}
 		statusCode, contentType, body, streamBody, err = adapter.Execute(c.Request.Context(), payloadToSend, opts)
 	}
-	utils.Logger.Printf("[ClaudeRouter] messages: step=execute_done status=%d contentType=%s bodyLen=%d streamBody=%v err=%v", statusCode, contentType, len(body), streamBody != nil, err)
+	utils.Logger.Debugf("[ClaudeRouter] messages: step=execute_done status=%d contentType=%s bodyLen=%d streamBody=%v err=%v", statusCode, contentType, len(body), streamBody != nil, err)
 
 	if err != nil {
-		utils.Logger.Printf("[ClaudeRouter] messages: step=execute_err err=%v", err)
+		utils.Logger.Errorf("[ClaudeRouter] messages: step=execute_err err=%v", err)
 
 		// 客户端主动取消请求，不记录错误日志，不封禁模型
 		if c.Request.Context().Err() != nil {
-			utils.Logger.Printf("[ClaudeRouter] messages: client_gone, skip error response")
+			utils.Logger.Debugf("[ClaudeRouter] messages: client_gone, skip error response")
 			return
 		}
 
@@ -401,7 +402,7 @@ func (h *MessagesHandler) handleMessages(c *gin.Context) {
 
 		if statusCode >= 400 {
 			upstreamMsg := extractUpstreamErrorMessage(body)
-			utils.Logger.Printf("[ClaudeRouter] messages: step=upstream_error status=%d message=%s", statusCode, upstreamMsg)
+			utils.Logger.Warnf("[ClaudeRouter] messages: step=upstream_error status=%d message=%s", statusCode, upstreamMsg)
 			anthropicErrorFromBody(c, statusCode, body)
 			return
 		}
@@ -410,7 +411,7 @@ func (h *MessagesHandler) handleMessages(c *gin.Context) {
 	}
 
 	if c.Request.Context().Err() != nil {
-		utils.Logger.Printf("[ClaudeRouter] messages: client_gone, skip response")
+		utils.Logger.Debugf("[ClaudeRouter] messages: client_gone, skip response")
 		if streamBody != nil {
 			_ = streamBody.Close()
 		}
@@ -432,39 +433,39 @@ func (h *MessagesHandler) handleMessages(c *gin.Context) {
 		_ = model.RecordErrorLog(targetModel.ID, username, statusCode, fmt.Sprintf("upstream error status=%d", statusCode))
 
 		upstreamMsg := extractUpstreamErrorMessage(body)
-		utils.Logger.Printf("[ClaudeRouter] messages: step=upstream_error status=%d message=%s", statusCode, upstreamMsg)
+		utils.Logger.Warnf("[ClaudeRouter] messages: step=upstream_error status=%d message=%s", statusCode, upstreamMsg)
 		anthropicErrorFromBody(c, statusCode, body)
 		return
 	}
 
 	if stream && streamBody != nil {
-		utils.Logger.Printf("[ClaudeRouter] messages: step=stream_write interface_type=%s response_format=%s", interfaceType, targetModel.ResponseFormat)
+		utils.Logger.Debugf("[ClaudeRouter] messages: step=stream_write interface_type=%s response_format=%s", interfaceType, targetModel.ResponseFormat)
 		defer streamBody.Close()
 
 		if strings.EqualFold(interfaceType, "openai_responses") && !strings.EqualFold(targetModel.ResponseFormat, "openai_responses") {
-			utils.Logger.Printf("[ClaudeRouter] messages: converting OpenAI Responses stream to Anthropic")
+			utils.Logger.Debugf("[ClaudeRouter] messages: converting OpenAI Responses stream to Anthropic")
 			pr, pw := io.Pipe()
 			go func() {
 				defer pw.Close()
 				messages.ConvertOpenAIResponsesStreamToAnthropic(c.Request.Context(), streamBody, pw)
 			}()
 			c.Header("Content-Type", "text/event-stream")
-			utils.ProxySSE(c, trackUsageStream(c, pr, targetModel.ID))
+			utils.ProxySSE(c, trackUsageStream(c, pr, targetModel.ID, requestedModel))
 			return
 		}
 		if strings.EqualFold(targetModel.ResponseFormat, "openai_responses") {
-			utils.Logger.Printf("[ClaudeRouter] messages: converting Anthropic stream to OpenAI Responses format")
+			utils.Logger.Debugf("[ClaudeRouter] messages: converting Anthropic stream to OpenAI Responses format")
 			pr, pw := io.Pipe()
 			go func() {
 				defer pw.Close()
 				messages.ConvertAnthropicStreamToOpenAIResponses(c.Request.Context(), streamBody, pw)
 			}()
 			c.Header("Content-Type", "text/event-stream")
-			utils.ProxySSE(c, trackUsageStream(c, pr, targetModel.ID))
+			utils.ProxySSE(c, trackUsageStream(c, pr, targetModel.ID, requestedModel))
 			return
 		}
 		c.Header("Content-Type", "text/event-stream")
-		utils.ProxySSE(c, trackUsageStream(c, streamBody, targetModel.ID))
+		utils.ProxySSE(c, trackUsageStream(c, streamBody, targetModel.ID, requestedModel))
 		return
 	}
 
@@ -476,28 +477,29 @@ func (h *MessagesHandler) handleMessages(c *gin.Context) {
 	if strings.EqualFold(interfaceType, "openai_responses") && !strings.EqualFold(targetModel.ResponseFormat, "openai_responses") {
 		converted, convErr := messages.ConvertOpenAIResponsesMessageToAnthropic(body)
 		if convErr != nil {
-			utils.Logger.Printf("[ClaudeRouter] messages: step=convert_openai_responses_to_anthropic err=%v", convErr)
+			utils.Logger.Errorf("[ClaudeRouter] messages: step=convert_openai_responses_to_anthropic err=%v", convErr)
 			anthropicError(c, http.StatusInternalServerError, "api_error", "Failed to convert response format")
 			return
 		}
 		body = converted
 		ct = "application/json"
-		utils.Logger.Printf("[ClaudeRouter] messages: step=write_response converted openai_responses->anthropic len=%d", len(body))
+		utils.Logger.Debugf("[ClaudeRouter] messages: step=write_response converted openai_responses->anthropic len=%d", len(body))
 	} else if strings.EqualFold(targetModel.ResponseFormat, "openai_responses") {
 		// 上游为 Anthropic，需返回 OpenAI Responses 格式
 		converted, convErr := messages.ConvertAnthropicMessageToOpenAIResponses(body)
 		if convErr != nil {
-			utils.Logger.Printf("[ClaudeRouter] messages: step=convert_anthropic_to_openai_responses err=%v", convErr)
+			utils.Logger.Errorf("[ClaudeRouter] messages: step=convert_anthropic_to_openai_responses err=%v", convErr)
 			anthropicError(c, http.StatusInternalServerError, "api_error", "Failed to convert response format")
 			return
 		}
 		body = converted
 		ct = "application/json"
-		utils.Logger.Printf("[ClaudeRouter] messages: step=write_response converted to openai_responses len=%d", len(body))
+		utils.Logger.Debugf("[ClaudeRouter] messages: step=write_response converted to openai_responses len=%d", len(body))
 	}
 
-	utils.Logger.Printf("[ClaudeRouter] messages: step=write_response status=%d len=%d", statusCode, len(body))
-	recordUsageFromBodyWithModel(c, body, targetModel.ID)
+	utils.Logger.Debugf("[ClaudeRouter] messages: step=write_response status=%d len=%d", statusCode, len(body))
+
+	recordUsageFromBodyWithModel(c, body, targetModel.ID, requestedModel)
 	c.Data(statusCode, ct, body)
 }
 
@@ -581,18 +583,13 @@ func extractAnthropicInputText(payload map[string]any) string {
 	return ""
 }
 
-func recordUsageFromBody(c *gin.Context, body []byte) {
+func recordUsageFromBodyWithModel(c *gin.Context, body []byte, modelID string, comboName string) {
 	input, output := extractUsageFromJSON(body)
-	recordUsage(c, input, output)
+	utils.Logger.Debugf("[ClaudeRouter] usage: upstream model=%s input=%d output=%d", modelID, input, output)
+	recordUsageWithModel(c, input, output, modelID, comboName)
 }
 
-func recordUsageFromBodyWithModel(c *gin.Context, body []byte, modelID string) {
-	input, output := extractUsageFromJSON(body)
-	utils.Logger.Printf("[ClaudeRouter] usage: upstream model=%s input=%d output=%d", modelID, input, output)
-	recordUsageWithModel(c, input, output, modelID)
-}
-
-func trackUsageStream(c *gin.Context, src io.ReadCloser, modelID string) io.ReadCloser {
+func trackUsageStream(c *gin.Context, src io.ReadCloser, modelID string, comboName string) io.ReadCloser {
 	if src == nil {
 		return nil
 	}
@@ -612,6 +609,9 @@ func trackUsageStream(c *gin.Context, src io.ReadCloser, modelID string) io.Read
 			if strings.HasPrefix(line, "data:") {
 				payload := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
 				if payload != "" && payload != "[DONE]" {
+					if !looksLikeJSONPayload([]byte(payload)) {
+						continue
+					}
 					in, out := extractUsageFromJSON([]byte(payload))
 					inputTokens += in
 					outputTokens += out
@@ -624,39 +624,150 @@ func trackUsageStream(c *gin.Context, src io.ReadCloser, modelID string) io.Read
 		if err := scanner.Err(); err != nil {
 			return
 		}
-		utils.Logger.Printf("[ClaudeRouter] usage: upstream model=%s stream input=%d output=%d", modelID, inputTokens, outputTokens)
-		recordUsageWithModel(c, inputTokens, outputTokens, modelID)
+		utils.Logger.Debugf("[ClaudeRouter] usage: upstream model=%s stream input=%d output=%d", modelID, inputTokens, outputTokens)
+		recordUsageWithModel(c, inputTokens, outputTokens, modelID, comboName)
 	}()
 	return pr
 }
 
 func extractUsageFromJSON(body []byte) (int64, int64) {
-	if len(body) == 0 {
+	trimmed := bytes.TrimSpace(body)
+	if len(trimmed) == 0 {
 		return 0, 0
 	}
+	if !looksLikeJSONPayload(trimmed) {
+		return 0, 0
+	}
+
 	var payload map[string]any
-	if err := json.Unmarshal(body, &payload); err != nil {
-		utils.Logger.Printf("[ClaudeRouter] usage: parse error: %v", err)
+	if err := json.Unmarshal(trimmed, &payload); err == nil {
+		input, output, found := extractUsageFromPayload(payload)
+		if found {
+			utils.Logger.Debugf("[ClaudeRouter] usage: extracted input=%d output=%d", input, output)
+			return input, output
+		}
+	} else {
+		if input, output, found := extractUsageFromSSEBody(trimmed); found {
+			utils.Logger.Debugf("[ClaudeRouter] usage: extracted input=%d output=%d", input, output)
+			return input, output
+		}
 		return 0, 0
 	}
-	usage, _ := payload["usage"].(map[string]any)
+
+	usage := findUsageMap(payload)
 	if usage == nil {
-		utils.Logger.Printf("[ClaudeRouter] usage: no usage field in response")
+		utils.Logger.Debugf("[ClaudeRouter] usage: no usage field in response")
 		return 0, 0
 	}
+	input, output := extractUsageFromMap(usage)
+	utils.Logger.Debugf("[ClaudeRouter] usage: extracted input=%d output=%d", input, output)
+	return input, output
+}
+
+func extractUsageFromPayload(payload map[string]any) (int64, int64, bool) {
+	usage := findUsageMap(payload)
+	if usage == nil {
+		return 0, 0, false
+	}
+	input, output := extractUsageFromMap(usage)
+	return input, output, true
+}
+
+func looksLikeJSONPayload(body []byte) bool {
+	trimmed := bytes.TrimSpace(body)
+	if len(trimmed) == 0 {
+		return false
+	}
+	return trimmed[0] == '{' || trimmed[0] == '['
+}
+
+func extractUsageFromSSEBody(body []byte) (int64, int64, bool) {
+	scanner := bufio.NewScanner(bytes.NewReader(body))
+	scanner.Buffer(make([]byte, 0, 64*1024), 8*1024*1024)
+
+	var inputTokens int64
+	var outputTokens int64
+	var found bool
+
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if !strings.HasPrefix(line, "data:") {
+			continue
+		}
+		payload := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+		if payload == "" || payload == "[DONE]" {
+			continue
+		}
+
+		var event map[string]any
+		if err := json.Unmarshal([]byte(payload), &event); err != nil {
+			continue
+		}
+		input, output, ok := extractUsageFromPayload(event)
+		if !ok {
+			continue
+		}
+		found = true
+		inputTokens += input
+		outputTokens += output
+	}
+	if err := scanner.Err(); err != nil {
+		utils.Logger.Errorf("[ClaudeRouter] usage: scan sse body error: %v", err)
+	}
+
+	return inputTokens, outputTokens, found
+}
+
+func findUsageMap(payload map[string]any) map[string]any {
+	if usage, _ := payload["usage"].(map[string]any); usage != nil {
+		return usage
+	}
+	if resp, _ := payload["response"].(map[string]any); resp != nil {
+		if usage, _ := resp["usage"].(map[string]any); usage != nil {
+			return usage
+		}
+	}
+	if message, _ := payload["message"].(map[string]any); message != nil {
+		if usage, _ := message["usage"].(map[string]any); usage != nil {
+			return usage
+		}
+	}
+	return nil
+}
+
+func extractUsageFromMap(usage map[string]any) (int64, int64) {
 	input := numToInt64(usage["input_tokens"])
 	if input == 0 {
 		input = numToInt64(usage["prompt_tokens"])
 	}
+	if input == 0 {
+		input = numToInt64(usage["prompt_token_count"])
+	}
+
 	output := numToInt64(usage["output_tokens"])
 	if output == 0 {
 		output = numToInt64(usage["completion_tokens"])
 	}
 	if output == 0 {
-		output = numToInt64(usage["output_tokens_details"])
+		output = numToInt64(usage["completion_token_count"])
 	}
-	utils.Logger.Printf("[ClaudeRouter] usage: extracted input=%d output=%d", input, output)
+	if output == 0 {
+		output = sumNumericMap(usage["output_tokens_details"])
+	}
+
 	return input, output
+}
+
+func sumNumericMap(v any) int64 {
+	m, ok := v.(map[string]any)
+	if !ok || m == nil {
+		return 0
+	}
+	var total int64
+	for _, raw := range m {
+		total += numToInt64(raw)
+	}
+	return total
 }
 
 func numToInt64(v any) int64 {
@@ -684,16 +795,16 @@ func numToInt64(v any) int64 {
 	}
 }
 
-func recordUsage(c *gin.Context, input, output int64) {
-	recordUsageWithModel(c, input, output, "")
+func recordUsage(c *gin.Context, input, output int64, combo string) {
+	recordUsageWithModel(c, input, output, "", combo)
 }
 
-func recordUsageWithModel(c *gin.Context, input, output int64, modelID string) {
+func recordUsageWithModel(c *gin.Context, input, output int64, modelID string, combo string) {
 	u := middleware.CurrentUser(c)
 	if u == nil || strings.TrimSpace(u.Username) == "" {
 		return
 	}
-	utils.Logger.Printf("user:%v", u.Username)
+	utils.Logger.Debugf("user:%v", u.Username)
 	if input <= 0 && output <= 0 {
 		return
 	}
@@ -718,7 +829,7 @@ func recordUsageWithModel(c *gin.Context, input, output int64, modelID string) {
 	if strings.TrimSpace(modelID) != "" {
 		m, err := model.GetModel(modelID)
 		if err == nil && m != nil {
-			_ = model.RecordUsageLog(u.Username, *m, input, output, m.InputPrice, m.OutputPrice)
+			_ = model.RecordUsageLog(u.Username, *m, input, output, m.InputPrice, m.OutputPrice, *model.GetComboIgnoreError(combo))
 		}
 	}
 }

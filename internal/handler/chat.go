@@ -79,7 +79,7 @@ func (h *ChatHandler) handleChatCompletions(c *gin.Context) {
 	if len(ua) > 80 {
 		ua = ua[:80] + "..."
 	}
-	utils.Logger.Printf("[ClaudeRouter] chat: request path=%s remote=%s user_agent=%s", c.Request.URL.Path, c.ClientIP(), ua)
+	utils.Logger.Debugf("[ClaudeRouter] chat: request path=%s remote=%s user_agent=%s", c.Request.URL.Path, c.ClientIP(), ua)
 
 	raw, err := c.GetRawData()
 	if err != nil {
@@ -146,7 +146,7 @@ func (h *ChatHandler) handleChatCompletions(c *gin.Context) {
 		return
 	}
 
-	utils.Logger.Printf("[ClaudeRouter] chat: step=execute interface=%s model=%s upstream=%s stream=%v", interfaceType, targetModel.ID, upstreamModel, stream)
+	utils.Logger.Debugf("[ClaudeRouter] chat: step=execute interface=%s model=%s upstream=%s stream=%v", interfaceType, targetModel.ID, upstreamModel, stream)
 
 	statusCode, contentType, body, streamBody, execErr := h.executeChatRequest(
 		c.Request.Context(),
@@ -212,18 +212,18 @@ func (h *ChatHandler) handleChatCompletions(c *gin.Context) {
 	if stream && streamBody != nil {
 		defer streamBody.Close()
 		c.Header("Content-Type", "text/event-stream")
-		utils.ProxySSE(c, trackUsageStream(c, streamBody, targetModel.ID))
+		utils.ProxySSE(c, trackUsageStream(c, streamBody, targetModel.ID, requestedModel))
 		return
 	}
 
 	if usedCache {
-		utils.Logger.Printf("[ClaudeRouter] chat: step=cached_model model=%s conversation=%s", targetModel.ID, conversationID)
+		utils.Logger.Debugf("[ClaudeRouter] chat: step=cached_model model=%s conversation=%s", targetModel.ID, conversationID)
 	}
 
 	if contentType == "" {
 		contentType = "application/json"
 	}
-	recordUsageFromBodyWithModel(c, body, targetModel.ID)
+	recordUsageFromBodyWithModel(c, body, targetModel.ID, requestedModel)
 	c.Data(statusCode, contentType, body)
 }
 
@@ -366,7 +366,7 @@ func executeOpenAIChatPassthrough(ctx context.Context, payload map[string]any, o
 	}
 
 	upstreamURL := buildOpenAIChatCompletionsURL(opts.BaseURL)
-	utils.Logger.Printf("[ClaudeRouter] chat: passthrough url=%s stream=%v", upstreamURL, opts.Stream)
+	utils.Logger.Debugf("[ClaudeRouter] chat: passthrough url=%s stream=%v", upstreamURL, opts.Stream)
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, upstreamURL, bytes.NewReader(reqBody))
 	if err != nil {
@@ -397,7 +397,7 @@ func executeOpenAIChatPassthrough(ctx context.Context, payload map[string]any, o
 	if len(bodyPreview) > 2000 {
 		bodyPreview = bodyPreview[:2000] + "...(truncated)"
 	}
-	utils.Logger.Printf("[ClaudeRouter] chat: passthrough upstream status=%d body=%s", resp.StatusCode, bodyPreview)
+	utils.Logger.Debugf("[ClaudeRouter] chat: passthrough upstream status=%d body=%s", resp.StatusCode, bodyPreview)
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return resp.StatusCode, resp.Header.Get("Content-Type"), body, nil, fmt.Errorf("chat: upstream error status=%d", resp.StatusCode)
@@ -420,7 +420,7 @@ func executeOpenAIChatViaAnthropic(ctx context.Context, payload map[string]any, 
 	}
 
 	upstreamURL := buildAnthropicMessagesURL(opts.BaseURL)
-	utils.Logger.Printf("[ClaudeRouter] chat: anthropic url=%s stream=%v", upstreamURL, opts.Stream)
+	utils.Logger.Debugf("[ClaudeRouter] chat: anthropic url=%s stream=%v", upstreamURL, opts.Stream)
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, upstreamURL, bytes.NewReader(translatedReq))
 	if err != nil {
@@ -445,21 +445,21 @@ func executeOpenAIChatViaAnthropic(ctx context.Context, payload map[string]any, 
 		if len(bodyPreview) > 2000 {
 			bodyPreview = bodyPreview[:2000] + "...(truncated)"
 		}
-		utils.Logger.Printf("[ClaudeRouter] chat: anthropic upstream error status=%d body=%s", resp.StatusCode, bodyPreview)
+		utils.Logger.Debugf("[ClaudeRouter] chat: anthropic upstream error status=%d body=%s", resp.StatusCode, bodyPreview)
 		return resp.StatusCode, resp.Header.Get("Content-Type"), body, nil, fmt.Errorf("chat: upstream error status=%d", resp.StatusCode)
 	}
 
 	if opts.Stream {
-		utils.Logger.Printf("[ClaudeRouter] chat: anthropic stream started, piping to client")
+		utils.Logger.Debugf("[ClaudeRouter] chat: anthropic stream started, piping to client")
 		pr, pw := io.Pipe()
 		go func() {
 			defer pw.Close()
 			defer resp.Body.Close()
-			utils.Logger.Printf("[ClaudeRouter] chat: anthropic stream goroutine started")
+			utils.Logger.Debugf("[ClaudeRouter] chat: anthropic stream goroutine started")
 			if err := messages.TranslateAnthropicStreamToOpenAIChat(ctx, resp.Body, pw, opts.UpstreamModel, originalReq, translatedReq); err != nil {
-				utils.Logger.Printf("[ClaudeRouter] chat: stream anthropic->openai translate error=%v", err)
+				utils.Logger.Errorf("[ClaudeRouter] chat: stream anthropic->openai translate error=%v", err)
 			} else {
-				utils.Logger.Printf("[ClaudeRouter] chat: anthropic stream translation completed successfully")
+				utils.Logger.Debugf("[ClaudeRouter] chat: anthropic stream translation completed successfully")
 			}
 		}()
 		return resp.StatusCode, "text/event-stream", nil, pr, nil
@@ -473,7 +473,7 @@ func executeOpenAIChatViaAnthropic(ctx context.Context, payload map[string]any, 
 	if len(upstreamPreview) > 2000 {
 		upstreamPreview = upstreamPreview[:2000] + "...(truncated)"
 	}
-	utils.Logger.Printf("[ClaudeRouter] chat: anthropic upstream status=%d body=%s", resp.StatusCode, upstreamPreview)
+	utils.Logger.Debugf("[ClaudeRouter] chat: anthropic upstream status=%d body=%s", resp.StatusCode, upstreamPreview)
 
 	convertedBody, err := messages.ConvertAnthropicToOpenAIChatResponse(ctx, opts.UpstreamModel, originalReq, translatedReq, upstreamBody)
 	if err != nil {
@@ -485,7 +485,7 @@ func executeOpenAIChatViaAnthropic(ctx context.Context, payload map[string]any, 
 	if len(convertedPreview) > 2000 {
 		convertedPreview = convertedPreview[:2000] + "...(truncated)"
 	}
-	utils.Logger.Printf("[ClaudeRouter] chat: anthropic converted body=%s", convertedPreview)
+	utils.Logger.Debugf("[ClaudeRouter] chat: anthropic converted body=%s", convertedPreview)
 
 	return resp.StatusCode, "application/json", convertedBody, nil, nil
 }
@@ -505,7 +505,7 @@ func executeOpenAIChatViaOpenAIResponses(ctx context.Context, payload map[string
 	}
 
 	upstreamURL := buildCodexResponsesURL(opts.BaseURL)
-	utils.Logger.Printf("[ClaudeRouter] chat: responses url=%s stream=%v", upstreamURL, opts.Stream)
+	utils.Logger.Debugf("[ClaudeRouter] chat: responses url=%s stream=%v", upstreamURL, opts.Stream)
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, upstreamURL, bytes.NewReader(translatedReq))
 	if err != nil {
@@ -533,7 +533,7 @@ func executeOpenAIChatViaOpenAIResponses(ctx context.Context, payload map[string
 		if len(bodyPreview) > 2000 {
 			bodyPreview = bodyPreview[:2000] + "...(truncated)"
 		}
-		utils.Logger.Printf("[ClaudeRouter] chat: responses upstream error status=%d body=%s", resp.StatusCode, bodyPreview)
+		utils.Logger.Debugf("[ClaudeRouter] chat: responses upstream error status=%d body=%s", resp.StatusCode, bodyPreview)
 		return resp.StatusCode, resp.Header.Get("Content-Type"), body, nil, fmt.Errorf("chat: upstream error status=%d", resp.StatusCode)
 	}
 
@@ -543,7 +543,7 @@ func executeOpenAIChatViaOpenAIResponses(ctx context.Context, payload map[string
 			defer pw.Close()
 			defer resp.Body.Close()
 			if err := messages.TranslateOpenAIResponsesStreamToOpenAIChat(ctx, resp.Body, pw, opts.UpstreamModel, originalReq, translatedReq); err != nil {
-				utils.Logger.Printf("[ClaudeRouter] chat: stream responses->openai translate error=%v", err)
+				utils.Logger.Errorf("[ClaudeRouter] chat: stream responses->openai translate error=%v", err)
 			}
 		}()
 		return resp.StatusCode, "text/event-stream", nil, pr, nil
@@ -557,7 +557,7 @@ func executeOpenAIChatViaOpenAIResponses(ctx context.Context, payload map[string
 	if len(upstreamPreview) > 2000 {
 		upstreamPreview = upstreamPreview[:2000] + "...(truncated)"
 	}
-	utils.Logger.Printf("[ClaudeRouter] chat: responses upstream status=%d body=%s", resp.StatusCode, upstreamPreview)
+	utils.Logger.Debugf("[ClaudeRouter] chat: responses upstream status=%d body=%s", resp.StatusCode, upstreamPreview)
 
 	translateBody := upstreamBody
 	contentType := strings.ToLower(resp.Header.Get("Content-Type"))
@@ -583,7 +583,7 @@ func executeOpenAIChatViaOpenAIResponses(ctx context.Context, payload map[string
 	if len(convertedPreview) > 2000 {
 		convertedPreview = convertedPreview[:2000] + "...(truncated)"
 	}
-	utils.Logger.Printf("[ClaudeRouter] chat: responses converted body=%s", convertedPreview)
+	utils.Logger.Debugf("[ClaudeRouter] chat: responses converted body=%s", convertedPreview)
 
 	return resp.StatusCode, "application/json", convertedBody, nil, nil
 }

@@ -214,7 +214,7 @@ func AddUserUsage(username string, inputTokens, outputTokens int64, inputPrice, 
 }
 
 // RecordUsageLog 记录单次请求的 token 使用日志。
-func RecordUsageLog(username string, m Model, inputTokens, outputTokens int64, inputPrice, outputPrice float64) error {
+func RecordUsageLog(username string, m Model, inputTokens, outputTokens int64, inputPrice, outputPrice float64, combo Combo) error {
 	if strings.TrimSpace(username) == "" || strings.TrimSpace(m.ID) == "" {
 		return nil
 	}
@@ -231,18 +231,17 @@ func RecordUsageLog(username string, m Model, inputTokens, outputTokens int64, i
 		outputPrice = 0
 	}
 
-	// 计算总费用：(inputTokens / 1000) * inputPrice + (outputTokens / 1000) * outputPrice
 	totalCost := (float64(inputTokens)/1000000)*inputPrice + (float64(outputTokens)/1000000)*outputPrice
 
 	log := &UsageLog{
 		Username:     username,
-		ModelID:      m.ID,
+		ModelID:      combo.ID,
 		InputTokens:  inputTokens,
 		OutputTokens: outputTokens,
 		InputPrice:   inputPrice,
 		OutputPrice:  outputPrice,
 		TotalCost:    totalCost,
-		Provider:     m.Provider,
+		Provider:     combo.Provider,
 		CreatedAt:    time.Now(),
 	}
 	return storage.DB.Create(log).Error
@@ -333,7 +332,33 @@ func GetCombo(id string) (*Combo, error) {
 	}
 	return &c, nil
 }
-
+func GetComboIgnoreError(id string) *Combo {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return &Combo{
+			Name:     "auto",
+			ID:       "auto",
+			Provider: "kiro",
+		}
+	}
+	var c Combo
+	// 使用 Where 明确条件，避免 GORM 日志/某些驱动把字符串用双引号内联导致 SQLite 将值误当作列名
+	if err := storage.DB.Where("id = ?", id).Preload("Items").First(&c).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return &Combo{
+				Name:     "auto",
+				ID:       "auto",
+				Provider: "kiro",
+			}
+		}
+		return &Combo{
+			Name:     "auto",
+			ID:       "auto",
+			Provider: "kiro",
+		}
+	}
+	return &c
+}
 func CreateCombo(c *Combo) error {
 	if c == nil || c.ID == "" {
 		return errors.New("invalid combo")
@@ -369,6 +394,7 @@ func UpdateCombo(id string, c *Combo) error {
 			"name":        c.Name,
 			"description": c.Description,
 			"enabled":     c.Enabled,
+			"provider":    c.Provider,
 		}).Error; err != nil {
 			return err
 		}

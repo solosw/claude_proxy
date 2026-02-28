@@ -58,10 +58,10 @@ type ComboItem struct {
 
 // Combo 表示一个组合模型（虚拟模型），对外表现为一个普通模型 ID。
 type Combo struct {
-	ID          string `json:"id" gorm:"primaryKey"` // 唯一 ID，例如 "combo:fast-and-cheap"
-	Name        string `json:"name"`                 // 展示名
+	ID          string      `json:"id" gorm:"primaryKey"` // 唯一 ID，例如 "combo:fast-and-cheap"
+	Name        string      `json:"name"`                 // 展示名
+	Provider    string      `json:"provider"`              // 提供商
 	Description string      `json:"description"`
 	Items       []ComboItem `json:"items" gorm:"foreignKey:ComboID;references:ID;constraint:OnDelete:CASCADE"`
 	Enabled     bool        `json:"enabled"`
 }
-

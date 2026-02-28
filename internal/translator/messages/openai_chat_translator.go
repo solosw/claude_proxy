@@ -123,7 +123,7 @@ func ReadOpenAIResponsesCompletedEvent(reader io.Reader) ([]byte, error) {
 			continue
 		}
 		switch event.Type {
-		case "response.completed":
+		case "response.completed", "response.done", "response_stop":
 			return append([]byte(nil), line...), nil
 		case "response.failed", "error":
 			return nil, &ResponsesCompletedEventError{EventType: event.Type, Body: append([]byte(nil), line...)}
@@ -179,7 +179,7 @@ func translateOpenAIChatStream(ctx context.Context, from, to sdktranslator.Forma
 		for _, chunk := range chunks {
 			chunkCount++
 			// 打印前几条转换后的 chunk
-			if chunkCount <= 5 {
+			if from == sdktranslator.FormatCodex || chunkCount <= 5 {
 				chunkPreview := string(chunk)
 				if len(chunkPreview) > 500 {
 					chunkPreview = chunkPreview[:500] + "...(truncated)"
@@ -187,24 +187,34 @@ func translateOpenAIChatStream(ctx context.Context, from, to sdktranslator.Forma
 				logStep("openai_chat_translator: translated chunk[%d]: %s", chunkCount, chunkPreview)
 			}
 			if strings.TrimSpace(chunk) == "" {
+				if _, err := io.WriteString(writer, "\n"); err != nil {
+					return err
+				}
 				continue
 			}
 
 			// SDK translator 返回的是裸 JSON，需要包装成 SSE 格式
 			trimmedChunk := strings.TrimSpace(chunk)
-			if !strings.HasPrefix(trimmedChunk, "data:") {
-				// 补充 SSE 格式：data: {json}\n\n
-				if _, err := io.WriteString(writer, "data: "+trimmedChunk+"\n\n"); err != nil {
-					logStep("openai_chat_translator: stream write error after %d lines: %v", lineCount, err)
-					return err
+			isSSEChunk := strings.HasPrefix(trimmedChunk, "data:") ||
+				strings.HasPrefix(trimmedChunk, "event:") ||
+				strings.HasPrefix(trimmedChunk, "id:") ||
+				strings.HasPrefix(trimmedChunk, "retry:")
+			if isSSEChunk {
+				if !strings.HasSuffix(chunk, "\n") {
+					chunk = chunk + "\n"
 				}
-			} else {
-				// 已经是 SSE 格式，直接写入
 				if _, err := io.WriteString(writer, chunk); err != nil {
 					logStep("openai_chat_translator: stream write error after %d lines: %v", lineCount, err)
 					return err
 				}
+				continue
 			}
+
+			if _, err := io.WriteString(writer, "data: "+trimmedChunk+"\n\n"); err != nil {
+				logStep("openai_chat_translator: stream write error after %d lines: %v", lineCount, err)
+				return err
+			}
+
 		}
 	}
 

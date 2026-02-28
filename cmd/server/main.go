@@ -13,6 +13,7 @@ import (
 	"awesomeProject/internal/model"
 	"awesomeProject/internal/storage"
 	"awesomeProject/internal/task"
+	"awesomeProject/pkg/utils"
 	"github.com/gin-gonic/gin"
 	"github.com/ncruces/zenity"
 )
@@ -23,7 +24,14 @@ func main() {
 		log.Fatalf("failed to load config: %v", err)
 	}
 
-	gin.SetMode(gin.DebugMode)
+	// 初始化日志级别
+	utils.InitLogger(cfg.Log.Level)
+
+	if cfg.Server.Debug {
+		gin.SetMode(gin.DebugMode)
+	} else {
+		gin.SetMode(gin.ReleaseMode)
+	}
 	router := gin.Default()
 
 	webGroup := router.Group("/")
