@@ -1,9 +1,9 @@
 package messages
 
 import (
+	"awesomeProject/pkg/utils"
 	"context"
 	"io"
-	"log"
 )
 
 // ExecuteOptions 上游请求所需配置（由 handler 从模型配置填入）。
@@ -26,7 +26,7 @@ type Adapter interface {
 
 // logStep 统一打印步骤日志，便于排查 404/协议问题。
 func logStep(step string, args ...any) {
-	log.Printf("[ClaudeRouter] messages: "+step, args...)
+	utils.Logger.Debugf("[ClaudeRouter] messages: "+step, args...)
 }
 
 // Registry 按 interface_type 获取适配器。默认使用 anthropic。

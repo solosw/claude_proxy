@@ -22,8 +22,9 @@ type ConversationModelEntry struct {
 }
 
 const (
-	TemporaryModelDisableTTL         = 15 * time.Minute
-	ConversationModelTTL             = 5 * time.Minute
+	TemporaryModelDisableTTL = 1 * time.Minute
+	ConversationModelTTL     = 2 *
+		TemporaryModelDisableTTL
 	ConversationModelCleanupInterval = ConversationModelTTL / 2
 )
 
@@ -94,6 +95,17 @@ func CleanupTemporarilyDisabledModels() {
 		}
 	}
 	temporarilyDisabledModelMu.Unlock()
+}
+
+// ClearAllTemporarilyDisabledModels 清除所有临时禁用的模型（当没有可用模型时调用）
+func ClearAllTemporarilyDisabledModels() {
+	temporarilyDisabledModelMu.Lock()
+	count := len(temporarilyDisabledModel)
+	temporarilyDisabledModel = make(map[string]time.Time)
+	temporarilyDisabledModelMu.Unlock()
+	if count > 0 {
+		utils.Logger.Printf("[ClaudeRouter] model_disable_cleared: cleared_count=%d reason=no_available_models", count)
+	}
 }
 
 // GetConversationModel 获取对话缓存的模型

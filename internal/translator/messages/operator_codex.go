@@ -1,10 +1,10 @@
 package messages
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -51,7 +51,11 @@ func (s *CodexStrategy) Execute(ctx context.Context, payload map[string]any, opt
 		return 0, "", nil, nil, fmt.Errorf("operator codex: create request failed: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "text/event-stream")
+	if opts.Stream {
+		req.Header.Set("Accept", "text/event-stream")
+	} else {
+		req.Header.Set("Accept", "application/json")
+	}
 	if strings.TrimSpace(opts.APIKey) != "" {
 		req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(opts.APIKey))
 	}
@@ -77,7 +81,16 @@ func (s *CodexStrategy) Execute(ctx context.Context, payload map[string]any, opt
 		go func() {
 			defer pw.Close()
 			defer resp.Body.Close()
-			if errConv := translateCodexStreamToClaude(ctx, resp.Body, pw, opts.UpstreamModel, originalReq, translatedReq); errConv != nil {
+			if errConv := translateOpenAIChatStream(
+				ctx,
+				sdktranslator.FormatCodex,
+				sdktranslator.FormatClaude,
+				resp.Body,
+				pw,
+				opts.UpstreamModel,
+				originalReq,
+				translatedReq,
+			); errConv != nil {
 				logStep("operator codex: stream translate error=%v", errConv)
 			}
 		}()
@@ -85,9 +98,29 @@ func (s *CodexStrategy) Execute(ctx context.Context, payload map[string]any, opt
 	}
 
 	defer resp.Body.Close()
-	completedJSON, err := readCodexCompletedEvent(resp.Body)
+	upstreamBody, err := io.ReadAll(io.LimitReader(resp.Body, 8*1024*1024))
 	if err != nil {
-		return 0, "", nil, nil, fmt.Errorf("operator codex: read completed event failed: %w", err)
+		return 0, "", nil, nil, fmt.Errorf("operator codex: read upstream body failed: %w", err)
+	}
+
+	translateBody := upstreamBody
+	lowerContentType := strings.ToLower(contentType)
+	if strings.Contains(lowerContentType, "text/event-stream") || looksLikeSSEPayload(upstreamBody) {
+		completedJSON, err := ReadOpenAIResponsesCompletedEvent(bytes.NewReader(upstreamBody))
+		if err != nil {
+			var eventErr *ResponsesCompletedEventError
+			if errors.As(err, &eventErr) {
+				return http.StatusBadRequest, "application/json", eventErr.Body, nil, fmt.Errorf("operator codex: upstream event error: %s", eventErr.EventType)
+			}
+			trimmed := bytes.TrimSpace(upstreamBody)
+			if json.Valid(trimmed) {
+				translateBody = append([]byte(nil), trimmed...)
+			} else {
+				return 0, "", nil, nil, fmt.Errorf("operator codex: read completed event failed: %w", err)
+			}
+		} else {
+			translateBody = completedJSON
+		}
 	}
 
 	var param any
@@ -98,7 +131,7 @@ func (s *CodexStrategy) Execute(ctx context.Context, payload map[string]any, opt
 		opts.UpstreamModel,
 		originalReq,
 		translatedReq,
-		completedJSON,
+		translateBody,
 		&param,
 	)
 	if strings.TrimSpace(out) == "" {
@@ -153,73 +186,13 @@ func buildCodexResponsesURL(baseURL string) string {
 	}
 }
 
-func translateCodexStreamToClaude(ctx context.Context, reader io.Reader, writer io.Writer, model string, originalReq, translatedReq []byte) error {
-	scanner := bufio.NewScanner(reader)
-	scanner.Buffer(make([]byte, 0, 64*1024), 10*1024*1024)
-
-	var param any
-	for scanner.Scan() {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		default:
-		}
-
-		line := scanner.Text()
-		chunks := sdktranslator.TranslateStreamByFormatName(
-			ctx,
-			sdktranslator.FormatCodex,
-			sdktranslator.FormatClaude,
-			model,
-			originalReq,
-			translatedReq,
-			[]byte(line),
-			&param,
-		)
-		for _, chunk := range chunks {
-			if strings.TrimSpace(chunk) == "" {
-				continue
-			}
-			if _, err := io.WriteString(writer, chunk); err != nil {
-				return err
-			}
-		}
+func looksLikeSSEPayload(body []byte) bool {
+	trimmed := bytes.TrimSpace(body)
+	if len(trimmed) == 0 {
+		return false
 	}
-	if err := scanner.Err(); err != nil {
-		return err
+	if bytes.HasPrefix(trimmed, []byte("data:")) || bytes.HasPrefix(trimmed, []byte("event:")) {
+		return true
 	}
-	return nil
-}
-
-func readCodexCompletedEvent(reader io.Reader) ([]byte, error) {
-	scanner := bufio.NewScanner(reader)
-	scanner.Buffer(make([]byte, 0, 64*1024), 10*1024*1024)
-
-	for scanner.Scan() {
-		line := bytes.TrimSpace(scanner.Bytes())
-		if len(line) == 0 {
-			continue
-		}
-		if bytes.HasPrefix(line, []byte("data:")) {
-			line = bytes.TrimSpace(line[5:])
-		}
-		if bytes.Equal(line, []byte("[DONE]")) || !json.Valid(line) {
-			continue
-		}
-
-		var event struct {
-			Type string `json:"type"`
-		}
-		if err := json.Unmarshal(line, &event); err != nil {
-			continue
-		}
-		if event.Type == "response.completed" {
-			return append([]byte(nil), line...), nil
-		}
-	}
-
-	if err := scanner.Err(); err != nil {
-		return nil, err
-	}
-	return nil, fmt.Errorf("response.completed not found")
+	return bytes.Contains(trimmed, []byte("\ndata:")) || bytes.Contains(trimmed, []byte("\nevent:"))
 }

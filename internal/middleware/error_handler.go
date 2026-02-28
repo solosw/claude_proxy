@@ -3,13 +3,11 @@ package middleware
 import (
 	"awesomeProject/internal/model"
 	"awesomeProject/internal/modelstate"
+	"awesomeProject/pkg/utils"
 	"fmt"
+	"github.com/gin-gonic/gin"
 	"net/http"
 	"strings"
-	"time"
-
-	"awesomeProject/pkg/utils"
-	"github.com/gin-gonic/gin"
 )
 
 // responseWriter 包装 gin.ResponseWriter 来捕获状态码
@@ -43,7 +41,7 @@ func ErrorHandler() gin.HandlerFunc {
 			modelID := extractModelIDFromRequest(c)
 			if modelID != "" {
 				// 禁用模型 15 分钟
-				modelstate.DisableModelTemporarily(modelID, 15*time.Minute)
+				modelstate.DisableModelTemporarily(modelID, modelstate.TemporaryModelDisableTTL)
 				utils.Logger.Printf("[ClaudeRouter] error_handler: model_disabled model=%s status=%d", modelID, statusCode)
 			}
 			conversionID := extractConversationIDFromRequest(c)

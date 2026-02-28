@@ -274,7 +274,22 @@ func resolveChatTargetModel(requestedModel, conversationID, inputText string) (*
 		filtered = append(filtered, it)
 	}
 	if len(filtered) == 0 {
-		return nil, false, fmt.Errorf("combo has no available models")
+		// 如果没有可用模型，清除所有临时禁用状态并重试一次
+		modelstate.ClearAllTemporarilyDisabledModels()
+		for _, it := range cb.Items {
+			modelID := strings.TrimSpace(it.ModelID)
+			if modelID == "" {
+				continue
+			}
+			m, err := model.GetModel(modelID)
+			if err != nil || m == nil || !m.Enabled {
+				continue
+			}
+			filtered = append(filtered, it)
+		}
+		if len(filtered) == 0 {
+			return nil, false, fmt.Errorf("combo has no available models")
+		}
 	}
 
 	tmp := &model.Combo{ID: cb.ID, Name: cb.Name, Description: cb.Description, Enabled: cb.Enabled, Items: filtered}

@@ -214,6 +214,17 @@ func ConvertOpenAIResponsesStreamToAnthropic(ctx context.Context, r io.Reader, w
 		toolInputByOutput = make(map[int]*strings.Builder)
 	)
 
+	emitAnthropicEvent := func(event string, data map[string]any) {
+		writeAnthropicSSE(w, event, data)
+		if b, err := json.Marshal(data); err == nil {
+			preview := string(b)
+			if len(preview) > 800 {
+				preview = preview[:800] + "...(truncated)"
+			}
+			logStep("OpenAI Responses converted event: type=%s, data=%s", event, preview)
+		}
+	}
+
 	startMessage := func(obj map[string]any) {
 		if messageStarted {
 			return
@@ -225,7 +236,7 @@ func ConvertOpenAIResponsesStreamToAnthropic(ctx context.Context, r io.Reader, w
 			id = getStr(obj, "id", id)
 			model = getStr(obj, "model", model)
 		}
-		writeAnthropicSSE(w, "message_start", map[string]any{
+		emitAnthropicEvent("message_start", map[string]any{
 			"type": "message_start",
 			"message": map[string]any{
 				"id":    id,
@@ -244,7 +255,7 @@ func ConvertOpenAIResponsesStreamToAnthropic(ctx context.Context, r io.Reader, w
 		idx := currentBlock
 		currentBlock++
 		blockIndexMap[outputIdx] = idx
-		writeAnthropicSSE(w, "content_block_start", map[string]any{
+		emitAnthropicEvent("content_block_start", map[string]any{
 			"type":  "content_block_start",
 			"index": idx,
 			"content_block": map[string]any{
@@ -271,7 +282,7 @@ func ConvertOpenAIResponsesStreamToAnthropic(ctx context.Context, r io.Reader, w
 		idx := currentBlock
 		currentBlock++
 		blockIndexMap[outputIdx] = idx
-		writeAnthropicSSE(w, "content_block_start", map[string]any{
+		emitAnthropicEvent("content_block_start", map[string]any{
 			"type":  "content_block_start",
 			"index": idx,
 			"content_block": map[string]any{
@@ -288,7 +299,7 @@ func ConvertOpenAIResponsesStreamToAnthropic(ctx context.Context, r io.Reader, w
 		if !ok {
 			return
 		}
-		writeAnthropicSSE(w, "content_block_stop", map[string]any{
+		emitAnthropicEvent("content_block_stop", map[string]any{
 			"type":  "content_block_stop",
 			"index": idx,
 		})
@@ -357,7 +368,7 @@ func ConvertOpenAIResponsesStreamToAnthropic(ctx context.Context, r io.Reader, w
 				// 检查是否需要发送 content_block_start
 				if delta != "" {
 					blockIdx := ensureTextBlock(outputIdx)
-					writeAnthropicSSE(w, "content_block_delta", map[string]any{
+					emitAnthropicEvent("content_block_delta", map[string]any{
 						"type":  "content_block_delta",
 						"index": blockIdx,
 						"delta": map[string]any{
@@ -387,7 +398,7 @@ func ConvertOpenAIResponsesStreamToAnthropic(ctx context.Context, r io.Reader, w
 						toolInputByOutput[outputIdx] = buf
 					}
 					buf.WriteString(delta)
-					writeAnthropicSSE(w, "content_block_delta", map[string]any{
+					emitAnthropicEvent("content_block_delta", map[string]any{
 						"type":  "content_block_delta",
 						"index": blockIdx,
 						"delta": map[string]any{
@@ -415,7 +426,7 @@ func ConvertOpenAIResponsesStreamToAnthropic(ctx context.Context, r io.Reader, w
 					}
 				}
 				if fullInput != "" {
-					writeAnthropicSSE(w, "content_block_delta", map[string]any{
+					emitAnthropicEvent("content_block_delta", map[string]any{
 						"type":  "content_block_delta",
 						"index": blockIdx,
 						"delta": map[string]any{
@@ -460,11 +471,11 @@ func ConvertOpenAIResponsesStreamToAnthropic(ctx context.Context, r io.Reader, w
 				closeBlock(outputIdx)
 			}
 
-			writeAnthropicSSE(w, "message_delta", map[string]any{
+			emitAnthropicEvent("message_delta", map[string]any{
 				"type":  "message_delta",
 				"delta": map[string]any{"stop_reason": mapStopReasonReverse(stopReason)},
 			})
-			writeAnthropicSSE(w, "message_stop", map[string]any{"type": "message_stop"})
+			emitAnthropicEvent("message_stop", map[string]any{"type": "message_stop"})
 		}
 		if scanner.Scan() {
 			// 空行

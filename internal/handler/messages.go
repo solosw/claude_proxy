@@ -221,9 +221,24 @@ func (h *MessagesHandler) handleMessages(c *gin.Context) {
 			filtered = append(filtered, it)
 		}
 		if len(filtered) == 0 {
-			utils.Logger.Warnf("[ClaudeRouter] messages: step=resolve_model err=no_available_models combo=%s", requestedModel)
-			anthropicError(c, http.StatusBadRequest, "invalid_request_error", "Combo has no available models")
-			return
+			// 如果没有可用模型，清除所有临时禁用状态并重试一次
+			modelstate.ClearAllTemporarilyDisabledModels()
+			for _, it := range cb.Items {
+				modelID := strings.TrimSpace(it.ModelID)
+				if modelID == "" {
+					continue
+				}
+				m, err := model.GetModel(modelID)
+				if err != nil || m == nil || !m.Enabled {
+					continue
+				}
+				filtered = append(filtered, it)
+			}
+			if len(filtered) == 0 {
+				utils.Logger.Warnf("[ClaudeRouter] messages: step=resolve_model err=no_available_models combo=%s", requestedModel)
+				anthropicError(c, http.StatusBadRequest, "invalid_request_error", "Combo has no available models")
+				return
+			}
 		}
 
 		// 使用过滤后的 combo 进行选择
