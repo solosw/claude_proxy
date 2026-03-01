@@ -5,6 +5,7 @@ import (
 	"awesomeProject/internal/handler"
 	"awesomeProject/internal/middleware"
 	"awesomeProject/internal/model"
+	"awesomeProject/internal/oldhandler"
 	"awesomeProject/internal/storage"
 	"awesomeProject/internal/task"
 	"awesomeProject/pkg/utils"
@@ -94,9 +95,11 @@ func main() {
 
 	chatTestHandler := handler.NewChatTestHandler()
 	chatTestHandler.RegisterRoutes(authenticated)
+	oldMessagesHandler := oldhandler.NewMessagesHandler(cfg)
+	oldMessagesHandler.RegisterRoutes(authenticated)
 
 	handler.RegisterModelRoutes(authenticated, cfg)
-
+	oldhandler.Start()
 	// 不需要认证的路由
 	apiRoot.GET("/healthz", func(c *gin.Context) {
 		c.JSON(200, gin.H{"status": "ok"})

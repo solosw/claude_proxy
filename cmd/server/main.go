@@ -1,6 +1,7 @@
 package main
 
 import (
+	"awesomeProject/internal/oldhandler"
 	"log"
 	"runtime"
 	"strings"
@@ -93,6 +94,8 @@ func main() {
 
 	messagesHandler := handler.NewMessagesHandler(cfg)
 	messagesHandler.RegisterRoutes(authenticated)
+	oldMessagesHandler := oldhandler.NewMessagesHandler(cfg)
+	oldMessagesHandler.RegisterRoutes(authenticated)
 
 	// 新增：Codex 直通 /v1/responses
 	codexProxyHandler := handler.NewCodexProxyHandler(cfg)
@@ -102,7 +105,7 @@ func main() {
 	chatTestHandler.RegisterRoutes(authenticated)
 
 	handler.RegisterModelRoutes(authenticated, cfg)
-
+	oldhandler.Start()
 	// 不需要认证的路由
 	apiRoot.GET("/healthz", func(c *gin.Context) {
 		c.JSON(200, gin.H{"status": "ok"})

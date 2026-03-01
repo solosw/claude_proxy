@@ -23,7 +23,7 @@ import (
 type OpenAIResponsesAdapter struct{}
 
 func init() {
-	Registry.Register("openai_responses", &OpenAIResponsesAdapter{})
+	Registry.Register("openai_responses", &CodexStrategy{})
 }
 
 // anthropicPayloadToResponsesParams 从 Anthropic payload 构建与 chat_test 一致的 ResponseNewParams，用于 Marshal 后发往上游。

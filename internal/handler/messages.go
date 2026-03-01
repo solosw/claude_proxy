@@ -305,6 +305,9 @@ func (h *MessagesHandler) handleMessages(c *gin.Context) {
 		}
 		if t := strings.TrimSpace(ep.Interface); t != "" {
 			interfaceType = t
+			//if t == strings.TrimSpace("codex") {
+			//	interfaceType = "openai_compatible"
+			//}
 		}
 		utils.Logger.Debugf("[ClaudeRouter] messages: step=operator using operator=%s (forwarding only, url/key from model when set)", operatorID)
 	}

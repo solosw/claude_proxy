@@ -1,0 +1,1 @@
+import{_,j as s,o as r,w as o,e,b as t}from"./index-ZgPeMoVT.js";const i={};function l(m,p){const n=e("router-view"),a=e("el-main"),c=e("el-container");return r(),s(c,{style:{height:"100vh"}},{default:o(()=>[t(a,{class:"main"},{default:o(()=>[t(n)]),_:1})]),_:1})}const f=_(i,[["render",l],["__scopeId","data-v-53a1e95a"]]);export{f as default};

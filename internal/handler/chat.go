@@ -317,27 +317,27 @@ func (h *ChatHandler) resolveChatEndpoint(targetModel *model.Model) (interfaceTy
 	baseURL = strings.TrimRight(strings.TrimSpace(targetModel.BaseURL), "/")
 	apiKey = strings.TrimSpace(targetModel.APIKey)
 
-	if operatorID := strings.TrimSpace(targetModel.OperatorID); operatorID != "" {
-		if h.cfg == nil || h.cfg.Operators == nil {
-			return "", "", "", fmt.Errorf("operator config not available")
-		}
-		ep, ok := h.cfg.Operators[operatorID]
-		if !ok {
-			return "", "", "", fmt.Errorf("operator not found: %s", operatorID)
-		}
-		if !ep.Enabled {
-			return "", "", "", fmt.Errorf("operator disabled: %s", operatorID)
-		}
-		if apiKey == "" {
-			apiKey = strings.TrimSpace(ep.APIKey)
-		}
-		if baseURL == "" {
-			baseURL = strings.TrimRight(strings.TrimSpace(ep.BaseURL), "/")
-		}
-		if t := strings.TrimSpace(ep.Interface); t != "" {
-			interfaceType = t
-		}
-	}
+	//if operatorID := strings.TrimSpace(targetModel.OperatorID); operatorID != "" {
+	//	if h.cfg == nil || h.cfg.Operators == nil {
+	//		return "", "", "", fmt.Errorf("operator config not available")
+	//	}
+	//	ep, ok := h.cfg.Operators[operatorID]
+	//	if !ok {
+	//		return "", "", "", fmt.Errorf("operator not found: %s", operatorID)
+	//	}
+	//	if !ep.Enabled {
+	//		return "", "", "", fmt.Errorf("operator disabled: %s", operatorID)
+	//	}
+	//	if apiKey == "" {
+	//		apiKey = strings.TrimSpace(ep.APIKey)
+	//	}
+	//	if baseURL == "" {
+	//		baseURL = strings.TrimRight(strings.TrimSpace(ep.BaseURL), "/")
+	//	}
+	//	if t := strings.TrimSpace(ep.Interface); t != "" {
+	//		interfaceType = t
+	//	}
+	//}
 
 	if interfaceType == "" {
 		interfaceType = "openai"

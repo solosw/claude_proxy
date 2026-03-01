@@ -28,6 +28,9 @@ type Adapter interface {
 func logStep(step string, args ...any) {
 	utils.Logger.Debugf("[ClaudeRouter] messages: "+step, args...)
 }
+func LogStep(step string, args ...any) {
+	utils.Logger.Debugf("[ClaudeRouter] messages: "+step, args...)
+}
 
 // Registry 按 interface_type 获取适配器。默认使用 anthropic。
 var Registry = NewRegistryMap()

@@ -1,6 +1,6 @@
 server:
   addr: "localhost:8090"
-  debug: false
+  debug: true
 gui:
   enabled: false
 log:
@@ -73,4 +73,4 @@ operators:
     base_url: "https://chatgpt.com/backend-api" # Codex API 基础 URL
     api_key: "your-codex-token" # Codex 访问令牌
     interface: "codex"
-    interface_type: "openai_responses"
+    interface_type: "openai_compatible"

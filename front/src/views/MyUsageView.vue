@@ -12,6 +12,7 @@ const logsLoading = ref(false);
 const currentPage = ref(1);
 const pageSize = ref(10);
 const total = ref(0);
+const activeGuideTab = ref('claude-code');
 
 const loadMyUsage = async () => {
   loading.value = true;
@@ -31,6 +32,9 @@ const allowedComboNames = computed(() => {
   if (!usage.value?.allowed_combos) return [];
   return usage.value.allowed_combos.split(',').map(s => s.trim()).filter(Boolean);
 });
+
+const anthropicBaseUrl = computed(() => `${window.location.origin}/back`);
+const openaiBaseUrl = computed(() => `${window.location.origin}/back/v1`);
 
 const loadUsageLogs = async () => {
   logsLoading.value = true;
@@ -149,6 +153,8 @@ onMounted(() => {
       </div>
     </div>
 
+
+
     <div v-if="usage" class="logs-section">
       <h3 class="logs-title">使用日志</h3>
       <el-table
@@ -196,6 +202,78 @@ onMounted(() => {
           @current-change="handlePageChange"
         />
       </div>
+    </div>
+
+
+    <div v-if="usage" class="guide-section">
+      <h3 class="guide-title">使用说明</h3>
+
+      <el-tabs v-model="activeGuideTab" class="guide-tabs" stretch>
+        <el-tab-pane label="Claude Code" name="claude-code">
+          <div class="guide-block">
+            <p class="guide-text">适用于日常开发与代码协作。将当前账号 API Key 配置到 Anthropic 环境变量后即可使用。</p>
+            <div class="guide-step">1. 配置环境变量</div>
+            <div class="guide-code-line">
+              <code>ANTHROPIC_BASE_URL={{ anthropicBaseUrl }}</code>
+              <el-button link type="primary" size="small" @click="copyToClipboard(anthropicBaseUrl)">复制</el-button>
+            </div>
+            <div class="guide-code-line">
+              <code>ANTHROPIC_API_KEY={{ usage.api_key }}</code>
+              <el-button link type="primary" size="small" @click="copyToClipboard(usage.api_key)">复制</el-button>
+            </div>
+            <div class="guide-step">2. 启动 Claude Code</div>
+            <div class="guide-code-line">
+              <code>claude</code>
+              <el-button link type="primary" size="small" @click="copyToClipboard('claude')">复制</el-button>
+            </div>
+          </div>
+        </el-tab-pane>
+
+        <el-tab-pane label="Codex" name="codex">
+          <div class="guide-block">
+            <p class="guide-text">Codex 客户端通常可通过 OpenAI Response接入本项目网关。</p>
+            <div class="guide-step">1. 配置 OpenAI 兼容地址与 Key</div>
+            <div class="guide-code-line">
+              <code>OPENAI_BASE_URL={{ openaiBaseUrl }}</code>
+              <el-button link type="primary" size="small" @click="copyToClipboard(openaiBaseUrl)">复制</el-button>
+            </div>
+            <div class="guide-code-line">
+              <code>OPENAI_API_KEY={{ usage.api_key }}</code>
+              <el-button link type="primary" size="small" @click="copyToClipboard(usage.api_key)">复制</el-button>
+            </div>
+            <p class="guide-tip">配置后，在 Codex 中选择可用模型即可开始使用。</p>
+          </div>
+        </el-tab-pane>
+
+        <el-tab-pane label="OpenCode" name="opencode">
+          <div class="guide-block">
+            <p class="guide-text">OpenCode 同样可按 OpenAI chat方式配置</p>
+            <div class="guide-code-line">
+              <code>OPENAI_BASE_URL={{ openaiBaseUrl }}</code>
+              <el-button link type="primary" size="small" @click="copyToClipboard(openaiBaseUrl)">复制</el-button>
+            </div>
+            <div class="guide-code-line">
+              <code>OPENAI_API_KEY={{ usage.api_key }}</code>
+              <el-button link type="primary" size="small" @click="copyToClipboard(usage.api_key)">复制</el-button>
+            </div>
+          </div>
+        </el-tab-pane>
+
+        <el-tab-pane label="其他" name="project-config">
+          <div class="guide-block">
+            <p class="guide-text">其他支持任何自定义模型openai chat接口。</p>
+            <div class="guide-code-line">
+              <code>BASE_URL={{ openaiBaseUrl }}</code>
+              <el-button link type="primary" size="small" @click="copyToClipboard(openaiBaseUrl)">复制</el-button>
+            </div>
+            <div class="guide-code-line">
+              <code>API_KEY={{ usage.api_key }}</code>
+              <el-button link type="primary" size="small" @click="copyToClipboard(usage.api_key)">复制</el-button>
+            </div>
+            <p class="guide-tip">若使用 Anthropic SDK，请将 Base URL 改为 {{ anthropicBaseUrl }}。</p>
+          </div>
+        </el-tab-pane>
+      </el-tabs>
     </div>
   </div>
 </template>
@@ -292,6 +370,89 @@ onMounted(() => {
   font-size: 12px;
   word-break: break-all;
   flex: 1;
+}
+
+.guide-section {
+  margin-top: 32px;
+  padding: 20px;
+  background: rgba(255, 255, 255, 0.6);
+  backdrop-filter: blur(10px);
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  box-shadow: 0 4px 15px rgba(102, 126, 234, 0.1);
+  animation: fadeInUp 0.6s ease-out 0.1s both;
+}
+
+.guide-title {
+  font-size: 18px;
+  font-weight: 600;
+  margin: 0 0 16px;
+  color: #111827;
+}
+
+.guide-tabs {
+  margin-top: 4px;
+}
+
+.guide-tabs :deep(.el-tabs__header) {
+  margin-bottom: 12px;
+}
+
+.guide-tabs :deep(.el-tabs__item) {
+  font-weight: 600;
+}
+
+.guide-block {
+  background: rgba(255, 255, 255, 0.85);
+  border: 1px solid rgba(102, 126, 234, 0.15);
+  border-radius: 12px;
+  padding: 14px;
+}
+
+.guide-block-title {
+  font-size: 16px;
+  font-weight: 700;
+  color: #111827;
+  margin-bottom: 8px;
+}
+
+.guide-text {
+  margin: 0;
+  color: #4b5563;
+  font-size: 13px;
+  line-height: 1.7;
+}
+
+.guide-step {
+  margin-top: 10px;
+  color: #374151;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.guide-code-line {
+  margin-top: 8px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: #f8fafc;
+  border: 1px solid #e5e7eb;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.guide-code-line code {
+  font-family: 'Courier New', monospace;
+  font-size: 12px;
+  color: #1f2937;
+  word-break: break-all;
+}
+
+.guide-tip {
+  margin: 10px 0 0;
+  color: #6b7280;
+  font-size: 12px;
 }
 
 .logs-section {
