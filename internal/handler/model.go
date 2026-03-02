@@ -194,35 +194,40 @@ func getMyUsageLogs(c *gin.Context) {
 }
 
 func listUsers(c *gin.Context) {
-	users, err := model.ListUsers()
+	// 获取分页参数
+	page := 1
+	pageSize := 10
+	if p := c.Query("page"); p != "" {
+		if parsed, err := strconv.Atoi(p); err == nil && parsed > 0 {
+			page = parsed
+		}
+	}
+	if ps := c.Query("page_size"); ps != "" {
+		if parsed, err := strconv.Atoi(ps); err == nil && parsed > 0 && parsed <= 100 {
+			pageSize = parsed
+		}
+	}
+
+	// 获取筛选参数
+	username := strings.TrimSpace(c.Query("username"))
+	apiKey := strings.TrimSpace(c.Query("api_key"))
+	var isAdmin *bool
+	if isAdminStr := strings.TrimSpace(c.Query("is_admin")); isAdminStr != "" {
+		isAdminVal := isAdminStr == "true" || isAdminStr == "1"
+		isAdmin = &isAdminVal
+	}
+
+	// 分页查询
+	users, total, err := model.ListUsersWithPage(username, apiKey, isAdmin, page, pageSize)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 
-	// 应用筛选条件
-	username := strings.TrimSpace(c.Query("username"))
-	isAdminStr := strings.TrimSpace(c.Query("is_admin"))
-
-	filtered := make([]*model.User, 0)
-	for _, u := range users {
-		// 按用户名筛选
-		if username != "" && !strings.Contains(strings.ToLower(u.Username), strings.ToLower(username)) {
-			continue
-		}
-
-		// 按管理员状态筛选
-		if isAdminStr != "" {
-			isAdmin := isAdminStr == "true" || isAdminStr == "1"
-			if u.IsAdmin != isAdmin {
-				continue
-			}
-		}
-
-		filtered = append(filtered, u)
-	}
-
-	c.JSON(http.StatusOK, filtered)
+	c.JSON(http.StatusOK, gin.H{
+		"items": users,
+		"total": total,
+	})
 }
 
 type userCreateRequest struct {
@@ -431,8 +436,34 @@ func usageRespFromUser(u *model.User) *usageResponse {
 }
 
 func listModels(c *gin.Context) {
-	ms := model.ListModels()
-	c.JSON(http.StatusOK, ms)
+	// 获取分页参数
+	page := 1
+	pageSize := 1000
+	if p := c.Query("page"); p != "" {
+		if parsed, err := strconv.Atoi(p); err == nil && parsed > 0 {
+			page = parsed
+		}
+	}
+	if ps := c.Query("page_size"); ps != "" {
+		if parsed, err := strconv.Atoi(ps); err == nil && parsed > 0 && parsed <= 100 {
+			pageSize = parsed
+		}
+	}
+
+	// 获取筛选参数（模型名称，支持模糊搜索）
+	name := strings.TrimSpace(c.Query("name"))
+
+	// 分页查询
+	models, total, err := model.ListModelsWithPage(name, page, pageSize)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"items": models,
+		"total": total,
+	})
 }
 
 func getModel(c *gin.Context) {

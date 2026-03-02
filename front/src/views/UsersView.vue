@@ -10,6 +10,13 @@ const usageLoading = ref(false);
 const usageDialogVisible = ref(false);
 const usageData = ref(null);
 
+// 分页相关
+const pagination = reactive({
+  currentPage: 1,
+  pageSize: 10,
+  total: 0,
+});
+
 const dialogVisible = ref(false);
 const isEdit = ref(false);
 const formRef = ref();
@@ -27,22 +34,47 @@ const rules = {};
 // 筛选条件
 const filterForm = reactive({
   username: '',
+  api_key: '',
   is_admin: '',
 });
 
 const loadUsers = async () => {
   loading.value = true;
   try {
-    const params = {};
+    const params = {
+      page: pagination.currentPage,
+      page_size: pagination.pageSize,
+    };
     if (filterForm.username) params.username = filterForm.username;
+    if (filterForm.api_key) params.api_key = filterForm.api_key;
     if (filterForm.is_admin !== '') params.is_admin = filterForm.is_admin;
     const { data } = await axios.get('/api/users', { params });
-    users.value = data || [];
+    // 后端返回 { items: [...], total: number }
+    users.value = data.items || [];
+    pagination.total = data.total || 0;
   } catch (_) {
     ElMessage.error('加载用户列表失败');
   } finally {
     loading.value = false;
   }
+};
+
+// 分页变化处理
+const handlePageChange = (page) => {
+  pagination.currentPage = page;
+  loadUsers();
+};
+
+const handleSizeChange = (size) => {
+  pagination.pageSize = size;
+  pagination.currentPage = 1;
+  loadUsers();
+};
+
+// 筛选变化时重置分页并加载
+const handleFilterChange = () => {
+  pagination.currentPage = 1;
+  loadUsers();
 };
 
 const loadCombos = async () => {
@@ -163,7 +195,9 @@ const deleteUser = (row) => {
 
 const resetFilter = () => {
   filterForm.username = '';
+  filterForm.api_key = '';
   filterForm.is_admin = '';
+  pagination.currentPage = 1;
   loadUsers();
 };
 
@@ -202,7 +236,15 @@ onMounted(() => {
             v-model="filterForm.username"
             placeholder="搜索用户名"
             clearable
-            @input="loadUsers"
+            @input="handleFilterChange"
+          />
+        </el-form-item>
+        <el-form-item label="API Key">
+          <el-input
+            v-model="filterForm.api_key"
+            placeholder="搜索 API Key"
+            clearable
+            @input="handleFilterChange"
           />
         </el-form-item>
         <el-form-item label="管理员">
@@ -210,7 +252,7 @@ onMounted(() => {
             v-model="filterForm.is_admin"
             placeholder="全部"
             clearable
-            @change="loadUsers"
+            @change="handleFilterChange"
           >
             <el-option label="是" value="true" />
             <el-option label="否" value="false" />
@@ -276,6 +318,19 @@ onMounted(() => {
         </template>
       </el-table-column>
     </el-table>
+
+    <!-- 分页 -->
+    <div class="pagination-container">
+      <el-pagination
+        v-model:current-page="pagination.currentPage"
+        v-model:page-size="pagination.pageSize"
+        :page-sizes="[10, 20, 50, 100]"
+        :total="pagination.total"
+        layout="total, sizes, prev, pager, next, jumper"
+        @size-change="handleSizeChange"
+        @current-change="handlePageChange"
+      />
+    </div>
 
     <!-- 新增/编辑用户弹窗 -->
     <el-dialog v-model="dialogVisible" :title="isEdit ? '编辑用户' : '新增用户'" width="580px">
@@ -432,5 +487,11 @@ onMounted(() => {
 
 .el-table :deep(.el-table__header th .cell) {
   color: #303133;
+}
+
+.pagination-container {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 16px;
 }
 </style>

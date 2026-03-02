@@ -7,6 +7,18 @@ const loading = ref(false);
 const models = ref([]);
 const operators = ref([]);
 
+// 分页相关
+const pagination = reactive({
+  currentPage: 1,
+  pageSize: 10,
+  total: 0,
+});
+
+// 筛选条件
+const filterForm = reactive({
+  name: '',
+});
+
 const dialogVisible = ref(false);
 const isEdit = ref(false);
 const form = reactive({
@@ -221,13 +233,45 @@ const downloadTemplate = () => {
 const loadModels = async () => {
   loading.value = true;
   try {
-    const { data } = await axios.get('/api/models');
-    models.value = data || [];
+    const params = {
+      page: pagination.currentPage,
+      page_size: pagination.pageSize,
+    };
+    if (filterForm.name) params.name = filterForm.name;
+    const { data } = await axios.get('/api/models', { params });
+    // 后端返回 { items: [...], total: number }
+    models.value = data.items || [];
+    pagination.total = data.total || 0;
   } catch (e) {
     ElMessage.error('加载模型列表失败');
   } finally {
     loading.value = false;
   }
+};
+
+// 分页变化处理
+const handlePageChange = (page) => {
+  pagination.currentPage = page;
+  loadModels();
+};
+
+const handleSizeChange = (size) => {
+  pagination.pageSize = size;
+  pagination.currentPage = 1;
+  loadModels();
+};
+
+// 筛选变化时重置分页并加载
+const handleFilterChange = () => {
+  pagination.currentPage = 1;
+  loadModels();
+};
+
+// 重置筛选
+const resetFilter = () => {
+  filterForm.name = '';
+  pagination.currentPage = 1;
+  loadModels();
 };
 
 const loadOperators = async () => {
@@ -506,6 +550,23 @@ onMounted(() => {
       </div>
     </div>
 
+    <!-- 筛选表单 -->
+    <div class="filter-panel mb-4">
+      <el-form :model="filterForm" layout="inline" class="filter-form">
+        <el-form-item label="模型名称">
+          <el-input
+            v-model="filterForm.name"
+            placeholder="搜索模型名称"
+            clearable
+            @input="handleFilterChange"
+          />
+        </el-form-item>
+        <el-form-item>
+          <el-button @click="resetFilter">重置</el-button>
+        </el-form-item>
+      </el-form>
+    </div>
+
     <el-table
       v-loading="loading"
       :data="models"
@@ -577,6 +638,19 @@ onMounted(() => {
         </template>
       </el-table-column>
     </el-table>
+
+    <!-- 分页 -->
+    <div class="pagination-container">
+      <el-pagination
+        v-model:current-page="pagination.currentPage"
+        v-model:page-size="pagination.pageSize"
+        :page-sizes="[10, 20, 50, 100]"
+        :total="pagination.total"
+        layout="total, sizes, prev, pager, next, jumper"
+        @size-change="handleSizeChange"
+        @current-change="handlePageChange"
+      />
+    </div>
 
     <el-dialog
       v-model="dialogVisible"
@@ -810,6 +884,24 @@ onMounted(() => {
 <style scoped>
 .p-6 {
   animation: fadeInUp 0.6s ease-out;
+}
+
+.filter-panel {
+  background: #f5f7fa;
+  padding: 12px;
+  border-radius: 4px;
+}
+
+.filter-form {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+}
+
+.pagination-container {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 16px;
 }
 
 .import-container {

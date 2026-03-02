@@ -15,6 +15,8 @@ const form = reactive({
   provider: '',
   description: '',
   enabled: true,
+  input_price: 0,
+  output_price: 0,
   items: [],
 });
 
@@ -28,8 +30,11 @@ const loadData = async () => {
       axios.get('/api/models'),
     ]);
     combos.value = comboResp.data || [];
-    models.value = modelResp.data || [];
+    // 处理分页返回的数据结构 {items: [...], total: ...}
+    models.value = modelResp.data?.items || modelResp.data || [];
+    console.log('加载的模型数据:', models.value);  // 调试日志
   } catch (e) {
+    console.error('加载数据失败:', e);
     ElMessage.error('加载数据失败');
   } finally {
     loading.value = false;
@@ -49,6 +54,8 @@ const openCreate = () => {
     provider: '',
     description: '',
     enabled: true,
+    input_price: 0,
+    output_price: 0,
     items: [],
   });
   dialogVisible.value = true;
@@ -56,7 +63,22 @@ const openCreate = () => {
 
 const openEdit = (row) => {
   isEdit.value = true;
-  Object.assign(form, JSON.parse(JSON.stringify(row)));
+  Object.assign(form, {
+    id: row.id || '',
+    name: row.name || '',
+    provider: row.provider || '',
+    description: row.description || '',
+    enabled: row.enabled !== false,
+    input_price: Number(row.input_price) || 0,
+    output_price: Number(row.output_price) || 0,
+    items: Array.isArray(row.items)
+      ? row.items.map(item => ({
+          model_id: item.model_id || '',
+          weight: Number(item.weight) || 1,
+          keywords: Array.isArray(item.keywords) ? item.keywords.join(', ') : String(item.keywords || ''),
+        }))
+      : [],
+  });
   dialogVisible.value = true;
 };
 
@@ -64,7 +86,7 @@ const addItem = () => {
   form.items.push({
     model_id: '',
     weight: 1,
-    keywords: [],
+    keywords: '',  // 改为空字符串，与表单输入框类型一致
   });
 };
 
@@ -196,6 +218,22 @@ onMounted(loadData);
             v-model="form.description"
             type="textarea"
             :rows="3"
+          />
+        </el-form-item>
+        <el-form-item label="输入单价(元/M)">
+          <el-input-number
+            v-model="form.input_price"
+            :min="0"
+            :step="0.01"
+            :precision="2"
+          />
+        </el-form-item>
+        <el-form-item label="输出单价(元/M)">
+          <el-input-number
+            v-model="form.output_price"
+            :min="0"
+            :step="0.01"
+            :precision="2"
           />
         </el-form-item>
         <el-form-item label="启用">

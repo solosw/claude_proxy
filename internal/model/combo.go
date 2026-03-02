@@ -64,4 +64,8 @@ type Combo struct {
 	Description string      `json:"description"`
 	Items       []ComboItem `json:"items" gorm:"foreignKey:ComboID;references:ID;constraint:OnDelete:CASCADE"`
 	Enabled     bool        `json:"enabled"`
+
+	// 输入/输出 token 单价（单位：元/百万 token）
+	InputPrice  float64 `json:"input_price" gorm:"not null;default:0"`
+	OutputPrice float64 `json:"output_price" gorm:"not null;default:0"`
 }

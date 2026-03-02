@@ -27,6 +27,33 @@ func ListModels() []*Model {
 	return ms
 }
 
+// ListModelsWithPage 分页查询模型列表，支持按名称模糊搜索（不区分大小写）
+func ListModelsWithPage(name string, page, pageSize int) ([]*Model, int64, error) {
+	var models []*Model
+	var total int64
+
+	// 构建查询
+	query := storage.DB.Model(&Model{})
+
+	// 按名称模糊搜索（不区分大小写）
+	if name != "" {
+		query = query.Where("LOWER(name) LIKE ?", "%"+strings.ToLower(name)+"%")
+	}
+
+	// 查询总数
+	if err := query.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+
+	// 分页查询
+	offset := (page - 1) * pageSize
+	if err := query.Order("id ASC").Limit(pageSize).Offset(offset).Find(&models).Error; err != nil {
+		return nil, 0, err
+	}
+
+	return models, total, nil
+}
+
 func GetModel(id string) (*Model, error) {
 	id = strings.TrimSpace(id)
 	if id == "" {
@@ -81,6 +108,43 @@ func ListUsers() ([]*User, error) {
 		return nil, err
 	}
 	return users, nil
+}
+
+// ListUsersWithPage 分页查询用户列表
+func ListUsersWithPage(username, apiKey string, isAdmin *bool, page, pageSize int) ([]*User, int64, error) {
+	var users []*User
+	var total int64
+
+	// 构建查询
+	query := storage.DB.Model(&User{})
+
+	// 按用户名筛选
+	if username != "" {
+		query = query.Where("username LIKE ?", "%"+username+"%")
+	}
+
+	// 按 API Key 筛选
+	if apiKey != "" {
+		query = query.Where("api_key LIKE ?", "%"+apiKey+"%")
+	}
+
+	// 按管理员状态筛选
+	if isAdmin != nil {
+		query = query.Where("is_admin = ?", *isAdmin)
+	}
+
+	// 查询总数
+	if err := query.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+
+	// 分页查询
+	offset := (page - 1) * pageSize
+	if err := query.Order("created_at desc").Limit(pageSize).Offset(offset).Find(&users).Error; err != nil {
+		return nil, 0, err
+	}
+
+	return users, total, nil
 }
 
 func GetUser(username string) (*User, error) {
@@ -391,10 +455,12 @@ func UpdateCombo(id string, c *Combo) error {
 	err := storage.DB.Transaction(func(tx *gorm.DB) error {
 		// 先更新 combo 主表
 		if err := tx.Model(&Combo{}).Where("id = ?", id).Updates(map[string]any{
-			"name":        c.Name,
-			"description": c.Description,
-			"enabled":     c.Enabled,
-			"provider":    c.Provider,
+			"name":         c.Name,
+			"description":  c.Description,
+			"enabled":      c.Enabled,
+			"provider":     c.Provider,
+			"input_price":  c.InputPrice,
+			"output_price": c.OutputPrice,
 		}).Error; err != nil {
 			return err
 		}

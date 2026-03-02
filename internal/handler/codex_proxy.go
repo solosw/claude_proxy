@@ -72,6 +72,7 @@ func (h *CodexProxyHandler) handleResponses(c *gin.Context) {
 
 	requestedModel, _ := payload["model"].(string)
 	requestedModel = strings.TrimSpace(requestedModel)
+	originalComboID := requestedModel  // ✅ 保存原始的 combo ID
 	if requestedModel == "" {
 		openaiError(c, http.StatusBadRequest, "invalid_request_error", "Missing model")
 		return
@@ -99,6 +100,15 @@ func (h *CodexProxyHandler) handleResponses(c *gin.Context) {
 		openaiError(c, http.StatusBadRequest, "invalid_request_error", err.Error())
 		return
 	}
+
+	// ✅ 如果使用了缓存，从缓存中获取原始 combo ID
+	if usedCache && conversationID != "" {
+		if comboID, ok := modelstate.GetConversationCombo(conversationID); ok {
+			originalComboID = comboID
+			utils.Logger.Debugf("[ClaudeRouter] responses: step=conversation_combo cached combo=%s", comboID)
+		}
+	}
+
 	c.Set("real_model_id", targetModel.ID)
 	if conversationID != "" {
 		c.Set("real_conversation_id", conversationID)
@@ -203,7 +213,7 @@ func (h *CodexProxyHandler) handleResponses(c *gin.Context) {
 	if stream && streamBody != nil {
 		defer streamBody.Close()
 		c.Header("Content-Type", "text/event-stream")
-		utils.ProxySSE(c, trackUsageStream(c, streamBody, targetModel.ID, requestedModel))
+		utils.ProxySSE(c, trackUsageStream(c, streamBody, targetModel.ID, originalComboID))
 		return
 	}
 
@@ -214,7 +224,7 @@ func (h *CodexProxyHandler) handleResponses(c *gin.Context) {
 	if contentType == "" {
 		contentType = "application/json"
 	}
-	recordUsageFromBodyWithModel(c, body, targetModel.ID, requestedModel)
+	recordUsageFromBodyWithModel(c, body, targetModel.ID, originalComboID)
 	c.Data(statusCode, contentType, body)
 }
 
@@ -280,8 +290,7 @@ func resolveResponseTargetModel(requestedModel, conversationID, inputText string
 			}
 
 			if conversationID != "" {
-				modelstate.SetConversationModel(conversationID, m.ID)
-
+				modelstate.SetConversationModelWithCombo(conversationID, m.ID, requestedModel)
 			}
 			return m, true, nil
 		}

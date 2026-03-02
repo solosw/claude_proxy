@@ -18,6 +18,7 @@ var (
 
 type ConversationModelEntry struct {
 	ModelID  string
+	ComboID  string
 	LastSeen time.Time
 }
 
@@ -137,17 +138,46 @@ func GetConversationModel(conversationID string) (string, bool) {
 	return ent.ModelID, true
 }
 
+// GetConversationCombo 获取对话缓存的 combo ID
+func GetConversationCombo(conversationID string) (string, bool) {
+	id := strings.TrimSpace(conversationID)
+	if id == "" {
+		return "", false
+	}
+	conversationModelMu.RLock()
+	ent := conversationModel[id]
+	conversationModelMu.RUnlock()
+
+	if ent.ComboID == "" {
+		return "", false
+	}
+	return ent.ComboID, true
+}
+
 // SetConversationModel 设置对话缓存的模型
 func SetConversationModel(conversationID, modelID string) {
+	SetConversationModelWithCombo(conversationID, modelID, "")
+}
+
+// SetConversationModelWithCombo 设置对话缓存的模型和 combo ID
+func SetConversationModelWithCombo(conversationID, modelID, comboID string) {
 	cid := strings.TrimSpace(conversationID)
 	mid := strings.TrimSpace(modelID)
 	if cid == "" || mid == "" {
 		return
 	}
 	conversationModelMu.Lock()
-	conversationModel[cid] = ConversationModelEntry{ModelID: mid, LastSeen: time.Now()}
+	conversationModel[cid] = ConversationModelEntry{
+		ModelID:  mid,
+		ComboID:  comboID,
+		LastSeen: time.Now(),
+	}
 	conversationModelMu.Unlock()
-	utils.Logger.Printf("[ClaudeRouter] conversation_model_set: conversation_id=%s model=%s", cid, mid)
+	if comboID != "" {
+		utils.Logger.Printf("[ClaudeRouter] conversation_model_set: conversation_id=%s model=%s combo=%s", cid, mid, comboID)
+	} else {
+		utils.Logger.Printf("[ClaudeRouter] conversation_model_set: conversation_id=%s model=%s", cid, mid)
+	}
 }
 
 // ClearConversationModel 清除对话缓存（出错时调用）

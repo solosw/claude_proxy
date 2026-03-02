@@ -5,11 +5,13 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"github.com/gin-gonic/gin"
-	"io"
+	"math/rand"
 	"net/http"
 	"strconv"
 	"strings"
+
+	"github.com/gin-gonic/gin"
+	"io"
 
 	"awesomeProject/internal/combo"
 	appconfig "awesomeProject/internal/config"
@@ -133,6 +135,7 @@ func (h *MessagesHandler) handleMessages(c *gin.Context) {
 
 	requestedModel, _ := payload["model"].(string)
 	requestedModel = strings.TrimSpace(requestedModel)
+	originalComboID := requestedModel  // ✅ 保存原始的 combo ID
 
 	conversationID := extractMetadataUserID(payload)
 	var cachedModelID string
@@ -144,6 +147,11 @@ func (h *MessagesHandler) handleMessages(c *gin.Context) {
 			c.Set("real_conversation_id", conversationID)
 			utils.Logger.Debugf("[ClaudeRouter] messages: step=conversation_model cached user_id=%s model=%s", conversationID, requestedModel)
 
+			// ✅ 从缓存中获取原始的 combo ID
+			if comboID, ok := modelstate.GetConversationCombo(conversationID); ok {
+				originalComboID = comboID
+				utils.Logger.Debugf("[ClaudeRouter] messages: step=conversation_combo cached combo=%s", comboID)
+			}
 		}
 
 	}
@@ -256,7 +264,7 @@ func (h *MessagesHandler) handleMessages(c *gin.Context) {
 		targetModel = m
 		utils.Logger.Debugf("[ClaudeRouter] messages: step=resolve_model combo chosen=%s", chosenID)
 		if conversationID != "" {
-			modelstate.SetConversationModel(conversationID, targetModel.ID)
+			modelstate.SetConversationModelWithCombo(conversationID, targetModel.ID, originalComboID)
 			c.Set("real_conversation_id", conversationID)
 		}
 	}
@@ -468,7 +476,7 @@ func (h *MessagesHandler) handleMessages(c *gin.Context) {
 				messages.ConvertOpenAIResponsesStreamToAnthropic(c.Request.Context(), streamBody, pw)
 			}()
 			c.Header("Content-Type", "text/event-stream")
-			utils.ProxySSE(c, trackUsageStream(c, pr, targetModel.ID, requestedModel))
+			utils.ProxySSE(c, trackUsageStream(c, pr, targetModel.ID, originalComboID))
 			return
 		}
 		if strings.EqualFold(targetModel.ResponseFormat, "openai_responses") {
@@ -479,11 +487,11 @@ func (h *MessagesHandler) handleMessages(c *gin.Context) {
 				messages.ConvertAnthropicStreamToOpenAIResponses(c.Request.Context(), streamBody, pw)
 			}()
 			c.Header("Content-Type", "text/event-stream")
-			utils.ProxySSE(c, trackUsageStream(c, pr, targetModel.ID, requestedModel))
+			utils.ProxySSE(c, trackUsageStream(c, pr, targetModel.ID, originalComboID))
 			return
 		}
 		c.Header("Content-Type", "text/event-stream")
-		utils.ProxySSE(c, trackUsageStream(c, streamBody, targetModel.ID, requestedModel))
+		utils.ProxySSE(c, trackUsageStream(c, streamBody, targetModel.ID, originalComboID))
 		return
 	}
 
@@ -517,7 +525,7 @@ func (h *MessagesHandler) handleMessages(c *gin.Context) {
 
 	utils.Logger.Debugf("[ClaudeRouter] messages: step=write_response status=%d len=%d", statusCode, len(body))
 
-	recordUsageFromBodyWithModel(c, body, targetModel.ID, requestedModel)
+	recordUsageFromBodyWithModel(c, body, targetModel.ID, originalComboID)
 	c.Data(statusCode, ct, body)
 }
 
@@ -827,27 +835,47 @@ func recordUsageWithModel(c *gin.Context, input, output int64, modelID string, c
 		return
 	}
 
-	// 获取模型价格信息
-	var inputPrice, outputPrice float64
+	var (
+		selectedModel *model.Model
+		selectedCombo *model.Combo
+		baseInput     float64
+		baseOutput    float64
+	)
+
 	if strings.TrimSpace(modelID) != "" {
-		m, err := model.GetModel(modelID)
-		if err == nil && m != nil {
-			inputPrice = m.InputPrice
-			outputPrice = m.OutputPrice
+		if m, err := model.GetModel(modelID); err == nil && m != nil {
+			selectedModel = m
+			baseInput = m.InputPrice
+			baseOutput = m.OutputPrice
 		}
 	}
 
-	if err := model.AddUserUsage(u.Username, input, output, inputPrice, outputPrice); err == nil {
+	comboID := strings.TrimSpace(combo)
+	if comboID != "" {
+		if cb, err := model.GetCombo(comboID); err == nil && cb != nil {
+			selectedCombo = cb
+			baseInput = cb.InputPrice
+			baseOutput = cb.OutputPrice
+		}
+	}
+
+	// 模拟缓存：价格按 75%-125% 随机浮动
+	fluctuation := 0.75 + rand.Float64()*0.5
+	billingInputPrice := baseInput * fluctuation
+	billingOutputPrice := baseOutput * fluctuation
+
+	if err := model.AddUserUsage(u.Username, input, output, billingInputPrice, billingOutputPrice); err == nil {
 		u.InputTokens += input
 		u.OutputTokens += output
 		u.TotalTokens += input + output
 	}
 
-	// 记录使用日志（包含模型单价信息）
-	if strings.TrimSpace(modelID) != "" {
-		m, err := model.GetModel(modelID)
-		if err == nil && m != nil {
-			_ = model.RecordUsageLog(u.Username, *m, input, output, m.InputPrice, m.OutputPrice, *model.GetComboIgnoreError(combo))
+	if selectedModel != nil {
+		comboForLog := model.GetComboIgnoreError(combo)
+		if selectedCombo != nil {
+			comboForLog = selectedCombo
 		}
+		// 日志中记录原始单价，用于对账：combo 请求优先记录 combo 单价
+		_ = model.RecordUsageLog(u.Username, *selectedModel, input, output, baseInput, baseOutput, *comboForLog)
 	}
 }
