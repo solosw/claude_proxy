@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"math/rand"
 	"net/http"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -32,6 +33,8 @@ type MessagesHandler struct {
 func NewMessagesHandler(cfg *appconfig.Config) *MessagesHandler {
 	return &MessagesHandler{cfg: cfg}
 }
+
+var comboModelDescriptionPattern = regexp.MustCompile(`<combo-model-description>[\s\S]*?</combo-model-description>`)
 
 // RegisterRoutes 在给定路由组上注册 /v1/messages（完整路径 = 组前缀 + /v1/messages，如 /back/v1/messages）。
 func (h *MessagesHandler) RegisterRoutes(r gin.IRoutes) {
@@ -135,7 +138,7 @@ func (h *MessagesHandler) handleMessages(c *gin.Context) {
 
 	requestedModel, _ := payload["model"].(string)
 	requestedModel = strings.TrimSpace(requestedModel)
-	originalComboID := requestedModel  // ✅ 保存原始的 combo ID
+	originalComboID := requestedModel // ✅ 保存原始的 combo ID
 
 	conversationID := extractMetadataUserID(payload)
 	var cachedModelID string
@@ -335,6 +338,11 @@ func (h *MessagesHandler) handleMessages(c *gin.Context) {
 
 	// 按模型配置决定是否保留扩展字段（metadata、thinking），避免上游 422
 	payloadToSend := applyForwardExtendedFields(payload, targetModel.ForwardMetadata, targetModel.ForwardThinking)
+	if comboDesc := resolveComboDescriptionForPrompt(originalComboID); comboDesc != "" {
+		if injectComboDescriptionIntoAnthropicPayload(payloadToSend, comboDesc) {
+			utils.Logger.Debugf("[ClaudeRouter] messages: step=inject_combo_description combo=%s", originalComboID)
+		}
+	}
 
 	// 功能1：去掉关键字，将 payload 中的 model 替换为实际的模型 ID
 	// 这样上游收到的是真实模型 ID，而不是 combo ID
@@ -550,6 +558,176 @@ func applyForwardExtendedFields(payload map[string]any, forwardMetadata, forward
 		delete(out, "thinking")
 	}
 	return out
+}
+
+func resolveComboDescriptionForPrompt(comboID string) string {
+	comboID = strings.TrimSpace(comboID)
+	if comboID == "" || !model.IsComboID(comboID) {
+		return ""
+	}
+	cb, err := model.GetCombo(comboID)
+	if err != nil || cb == nil {
+		return ""
+	}
+	return strings.TrimSpace(cb.Description)
+}
+
+func injectComboDescriptionIntoAnthropicPayload(payload map[string]any, comboDescription string) bool {
+	if payload == nil {
+		return false
+	}
+	comboDescription = strings.TrimSpace(comboDescription)
+	if comboDescription == "" {
+		return false
+	}
+	instruction := "<combo-model-description>\n" + comboDescription + "\n</combo-model-description>"
+	hasComboDescription := func(contentStr string) bool {
+		return comboModelDescriptionPattern.MatchString(contentStr)
+	}
+	switch v := payload["system"].(type) {
+	case string:
+		v = strings.TrimSpace(v)
+		if hasComboDescription(v) {
+			return true
+		}
+		if v == "" {
+			payload["system"] = instruction
+		} else {
+			payload["system"] = instruction + "\n\n" + v
+		}
+		return true
+	case []any:
+		//newSystem := make([]any, 0, len(v)+1)
+		//newSystem = append(newSystem, map[string]any{"type": "text", "text": instruction})
+		//newSystem = append(newSystem, v...)
+		//payload["system"] = newSystem
+		return true
+	case nil:
+		payload["system"] = instruction
+		return true
+	default:
+		payload["system"] = instruction
+		return true
+	}
+}
+
+func injectComboDescriptionIntoOpenAIChatPayload(payload map[string]any, comboDescription string) bool {
+	if payload == nil {
+		return false
+	}
+	comboDescription = strings.TrimSpace(comboDescription)
+	if comboDescription == "" {
+		return false
+	}
+	messagesRaw, ok := payload["messages"].([]any)
+	if !ok {
+		return false
+	}
+
+	instruction := "<combo-model-description>\n" + comboDescription + "\n</combo-model-description>"
+
+	// 查找第一条 role=system 的消息
+	var systemIndex = -1
+	for i, msg := range messagesRaw {
+		m, ok := msg.(map[string]any)
+		if !ok {
+			continue
+		}
+		role, _ := m["role"].(string)
+		if strings.EqualFold(strings.TrimSpace(role), "system") {
+			systemIndex = i
+			break
+		}
+	}
+
+	// 辅助函数：检测是否已包含 combo-model-description 标签
+	hasComboDescription := func(contentStr string) bool {
+		return comboModelDescriptionPattern.MatchString(contentStr)
+	}
+
+	// 如果存在 system message，检查并合并
+	if systemIndex >= 0 {
+		systemMsg := messagesRaw[systemIndex].(map[string]any)
+		content := systemMsg["content"]
+
+		// 提取 content 文本用于检查
+		contentStr := ""
+		switch c := content.(type) {
+		case string:
+			contentStr = c
+		case []any:
+			for _, item := range c {
+				if blk, ok := item.(map[string]any); ok {
+					if t, _ := blk["type"].(string); t == "text" || t == "" {
+						if txt, ok := blk["text"].(string); ok {
+							contentStr += txt
+						}
+					}
+				}
+			}
+		}
+
+		// 已包含则跳过，避免重复注入
+		if hasComboDescription(contentStr) {
+			return false
+		}
+
+		// 合并到现有 system content 前面
+		switch c := content.(type) {
+		case string:
+			c = strings.TrimSpace(c)
+			if c == "" {
+				systemMsg["content"] = instruction
+			} else {
+				systemMsg["content"] = instruction + "\n\n" + c
+			}
+		case []any:
+			// 在数组头部插入 text block
+			newContent := make([]any, 0, len(c)+1)
+			newContent = append(newContent, map[string]any{"type": "text", "text": instruction})
+			newContent = append(newContent, c...)
+			systemMsg["content"] = newContent
+		default:
+			// 未知类型，在头部 prepend 新的 system message
+			systemMessage := map[string]any{
+				"role":    "system",
+				"content": instruction,
+			}
+			newMessages := make([]any, 0, len(messagesRaw)+1)
+			newMessages = append(newMessages, systemMessage)
+			newMessages = append(newMessages, messagesRaw...)
+			payload["messages"] = newMessages
+		}
+		return true
+	}
+
+	// 没有 system message，在头部 prepend 一条新的
+	systemMessage := map[string]any{
+		"role":    "system",
+		"content": instruction,
+	}
+	newMessages := make([]any, 0, len(messagesRaw)+1)
+	newMessages = append(newMessages, systemMessage)
+	newMessages = append(newMessages, messagesRaw...)
+	payload["messages"] = newMessages
+	return true
+}
+
+func injectComboDescriptionIntoResponsesPayload(payload map[string]any, comboDescription string) bool {
+	if payload == nil {
+		return false
+	}
+	comboDescription = strings.TrimSpace(comboDescription)
+	if comboDescription == "" {
+		return false
+	}
+	instruction := "<combo-model-description>\n" + comboDescription + "\n</combo-model-description>"
+	if curr := strings.TrimSpace(getStringMapValue(payload, "instructions")); curr != "" {
+		payload["instructions"] = instruction + "\n\n" + curr
+	} else {
+		payload["instructions"] = instruction
+	}
+	return true
 }
 
 // extractAnthropicInputText 从 Anthropic messages 请求 payload 中提取可用于关键词判断的输入文本。

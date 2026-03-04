@@ -72,7 +72,7 @@ func (h *CodexProxyHandler) handleResponses(c *gin.Context) {
 
 	requestedModel, _ := payload["model"].(string)
 	requestedModel = strings.TrimSpace(requestedModel)
-	originalComboID := requestedModel  // ✅ 保存原始的 combo ID
+	originalComboID := requestedModel // ✅ 保存原始的 combo ID
 	if requestedModel == "" {
 		openaiError(c, http.StatusBadRequest, "invalid_request_error", "Missing model")
 		return
@@ -126,6 +126,11 @@ func (h *CodexProxyHandler) handleResponses(c *gin.Context) {
 	}
 
 	payloadToSend := applyResponsesAdapter(payload, upstreamModel, targetModel)
+	//if comboDesc := resolveComboDescriptionForPrompt(originalComboID); comboDesc != "" {
+	//	if injectComboDescriptionIntoResponsesPayload(payloadToSend, comboDesc) {
+	//		utils.Logger.Debugf("[ClaudeRouter] responses: step=inject_combo_description combo=%s", originalComboID)
+	//	}
+	//}
 
 	waitModelQPS(c.Request.Context(), targetModel.ID, targetModel.MaxQPS)
 	if c.Request.Context().Err() != nil {

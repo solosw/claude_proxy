@@ -27,7 +27,10 @@ func main() {
 		gin.SetMode(gin.ReleaseMode)
 	}
 
-	router := gin.Default()
+	router := gin.New()
+	router.Use(gin.Recovery())
+	router.Use(middleware.Cors())
+	router.Use(middleware.GzipMiddleware())
 
 	webGroup := router.Group("/")
 	webGroup.Use(func(c *gin.Context) {
