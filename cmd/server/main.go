@@ -33,8 +33,11 @@ func main() {
 	} else {
 		gin.SetMode(gin.ReleaseMode)
 	}
-	router := gin.Default()
 
+	router := gin.New()
+	router.Use(gin.Recovery())
+	router.Use(middleware.Cors())
+	router.Use(middleware.GzipMiddleware())
 	webGroup := router.Group("/")
 	webGroup.Use(func(c *gin.Context) {
 		if strings.HasPrefix(c.Request.URL.Path, "/assets") ||

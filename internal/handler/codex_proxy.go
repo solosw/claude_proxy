@@ -1198,6 +1198,25 @@ func (h *CodexProxyHandler) executeResponsesRequest(ctx context.Context, payload
 	}
 }
 
+var (
+	// 全局复用 HTTP Client，避免每次新建
+	globalCodexHTTPClient = &http.Client{
+		Timeout: 30 * time.Minute, // 上游可能有长时间推理任务
+		Transport: &http.Transport{
+			Proxy: http.ProxyFromEnvironment,
+			DialContext: (&net.Dialer{
+				Timeout:   30 * time.Second,
+				KeepAlive: 30 * time.Second,
+			}).DialContext,
+			ForceAttemptHTTP2:     true,
+			MaxIdleConns:          100,
+			IdleConnTimeout:       90 * time.Second,
+			TLSHandshakeTimeout:   10 * time.Second,
+			ExpectContinueTimeout: 1 * time.Second,
+		},
+	}
+)
+
 func executeResponsesPassthrough(ctx context.Context, payload map[string]any, opts messages.ExecuteOptions) (int, string, []byte, io.ReadCloser, error) {
 	reqBody, err := json.Marshal(payload)
 	if err != nil {
@@ -1207,7 +1226,7 @@ func executeResponsesPassthrough(ctx context.Context, payload map[string]any, op
 	upstreamURLs := buildResponsesUpstreamURLs(opts.BaseURL)
 	utils.Logger.Debugf("[ClaudeRouter] responses: passthrough urls=%v stream=%v", upstreamURLs, opts.Stream)
 
-	client := &http.Client{Timeout: 30 * time.Minute}
+	client := globalCodexHTTPClient
 
 	var resp *http.Response
 	var lastErr error
@@ -1253,7 +1272,7 @@ func executeResponsesPassthrough(ctx context.Context, payload map[string]any, op
 	}
 
 	defer resp.Body.Close()
-	body, _ := io.ReadAll(resp.Body)
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 10*1024*1024)) // 限制最大读取 10MB
 
 	bodyPreview := string(body)
 	if len(bodyPreview) > 2000 {
@@ -1331,7 +1350,7 @@ func executeResponsesViaSDKAdapter(
 		req.Header.Set(k, v)
 	}
 
-	client := &http.Client{Timeout: 30 * time.Minute}
+	client := globalCodexHTTPClient
 	resp, respErr := client.Do(req)
 	if respErr != nil {
 		return 0, "", nil, nil, fmt.Errorf("responses: upstream request: %w", respErr)
@@ -1345,7 +1364,7 @@ func executeResponsesViaSDKAdapter(
 
 	if statusCode < 200 || statusCode >= 300 {
 		defer resp.Body.Close()
-		body, _ = io.ReadAll(resp.Body)
+	body, _ = io.ReadAll(io.LimitReader(resp.Body, 10*1024*1024)) // 限制最大读取 10MB
 		if len(body) == 0 {
 			body, _ = json.Marshal(gin.H{"error": fmt.Sprintf("upstream error status=%d", statusCode)})
 		}

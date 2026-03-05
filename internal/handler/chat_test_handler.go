@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
-	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -119,7 +118,7 @@ func (h *ChatTestHandler) handleChatTest(c *gin.Context) {
 			TimeoutSeconds: 600,
 		})
 
-		log.Printf("model:%v", upstreamModel)
+		utils.Logger.Printf("model:%v", upstreamModel)
 		chatReq := &provider.ChatRequest{
 			Model:     upstreamModel,
 			MaxTokens: req.MaxTokens,
@@ -412,7 +411,7 @@ func (h *ChatTestHandler) streamOpenAIResponses(c *gin.Context, client *openai.C
 		event := stream.Current()
 		if event.Type == "response.output_text.delta" && event.Delta != "" {
 			data := map[string]any{
-				"type": "content_delta",
+				"type":  "content_delta",
 				"delta": map[string]any{"type": "text_delta", "text": event.Delta},
 			}
 			b, _ := json.Marshal(data)
@@ -422,7 +421,7 @@ func (h *ChatTestHandler) streamOpenAIResponses(c *gin.Context, client *openai.C
 		}
 	}
 	if err := stream.Err(); err != nil {
-		log.Printf("[chat_test] openai_responses stream err: %v", err)
+		utils.Logger.Printf("[chat_test] openai_responses stream err: %v", err)
 		// 已开始写流，只能写一条错误事件
 		errData, _ := json.Marshal(map[string]any{"type": "error", "message": err.Error()})
 		_, _ = c.Writer.Write([]byte("event: error\n"))

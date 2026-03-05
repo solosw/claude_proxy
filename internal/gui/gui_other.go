@@ -12,7 +12,7 @@ import (
 func StartWindowsGUI(addr string) {
 	// 非 Windows 平台：不启动 GUI，改用浏览器模式
 	url := "http://" + addr
-	log.Printf("GUI not available on this platform, opening in default browser: %s", url)
+	utils.Logger.Printf("GUI not available on this platform, opening in default browser: %s", url)
 	StartBrowserMode(addr)
 }
 
@@ -63,7 +63,7 @@ func onSystrayExit() {
 
 // openInBrowser 在默认浏览器中打开 URL
 func openInBrowser(url string) {
-	log.Printf("Opening URL in default browser: %s", url)
+	utils.Logger.Printf("Opening URL in default browser: %s", url)
 
 	var cmd *exec.Cmd
 
@@ -76,12 +76,12 @@ func openInBrowser(url string) {
 	case "windows":
 		cmd = exec.Command("cmd", "/c", "start", url)
 	default:
-		log.Printf("Unsupported platform for opening browser: %s", runtime.GOOS)
+		utils.Logger.Printf("Unsupported platform for opening browser: %s", runtime.GOOS)
 		return
 	}
 
 	if err := cmd.Start(); err != nil {
-		log.Printf("Failed to open browser: %v", err)
+		utils.Logger.Printf("Failed to open browser: %v", err)
 	}
 }
 
@@ -90,7 +90,7 @@ func loadTrayIcon() []byte {
 	iconPath := "./public/web/logo.ico"
 	data, err := os.ReadFile(iconPath)
 	if err != nil {
-		log.Printf("Failed to load tray icon from %s: %v, using no icon", iconPath, err)
+		utils.Logger.Printf("Failed to load tray icon from %s: %v, using no icon", iconPath, err)
 		return nil
 	}
 	return data

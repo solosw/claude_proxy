@@ -4,7 +4,15 @@ server:
 gui:
   enabled: false
 log:
-  level: info
+    level: debug
+    format: console  # json 或 console
+    async: true    # 是否异步
+    file_path:   # 文件路径，为空则不输出到文件
+    max_size: 10    # MB
+    max_backups: 5
+    max_age: 30
+    compress: true
+
 
 database:
   driver: sqlite # sqlite 或 mysql

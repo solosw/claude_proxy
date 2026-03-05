@@ -2,7 +2,6 @@ package task
 
 import (
 	"awesomeProject/internal/model"
-	"log"
 	"time"
 
 	"awesomeProject/internal/storage"
@@ -29,7 +28,7 @@ func CleanupOldLogs() error {
 func StartCleanupTask() {
 	// 项目启动时立即执行一次
 	if err := CleanupOldLogs(); err != nil {
-		log.Printf("[CleanupTask] initial cleanup failed: %v", err)
+		utils.Logger.Printf("[CleanupTask] initial cleanup failed: %v", err)
 	}
 
 	// 启动定时任务，每天执行一次
@@ -38,7 +37,7 @@ func StartCleanupTask() {
 		defer ticker.Stop()
 		for range ticker.C {
 			if err := CleanupOldLogs(); err != nil {
-				log.Printf("[CleanupTask] scheduled cleanup failed: %v", err)
+				utils.Logger.Printf("[CleanupTask] scheduled cleanup failed: %v", err)
 			}
 		}
 	}()

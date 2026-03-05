@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"sync"
+	"time"
 
 	"golang.org/x/time/rate"
 )
@@ -14,8 +15,9 @@ var (
 )
 
 type modelLimiterEntry struct {
-	limiter *rate.Limiter
-	qps     float64
+	limiter  *rate.Limiter
+	qps      float64
+	lastUsed time.Time
 }
 
 // waitModelQPS 若该模型配置了 MaxQPS > 0，则阻塞直到获得令牌或 ctx 取消。
@@ -32,7 +34,25 @@ func waitModelQPS(ctx context.Context, modelID string, maxQPS float64) {
 		}
 		modelLimiters[modelID] = entry
 	}
+	entry.lastUsed = time.Now()
 	lim := entry.limiter
 	modelLimitersMu.Unlock()
 	_ = lim.Wait(ctx)
+}
+
+// cleanupLimiters 定期清理超过 1 小时未使用的 limiter 以防内存泄漏。
+func init() {
+	go func() {
+		for {
+			time.Sleep(10 * time.Minute)
+			modelLimitersMu.Lock()
+			now := time.Now()
+			for id, entry := range modelLimiters {
+				if now.Sub(entry.lastUsed) > time.Hour {
+					delete(modelLimiters, id)
+				}
+			}
+			modelLimitersMu.Unlock()
+		}
+	}()
 }

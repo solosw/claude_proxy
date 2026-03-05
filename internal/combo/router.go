@@ -2,7 +2,7 @@ package combo
 
 import (
 	"awesomeProject/internal/model"
-	"log"
+	"awesomeProject/pkg/utils"
 	"regexp"
 	"sort"
 	"strings"
@@ -49,7 +49,7 @@ func ChooseModelID(c *model.Combo, inputText string) string {
 	}
 
 	text := strings.TrimSpace(inputText)
-	log.Printf("Input Text: %s\n", text)
+	utils.Logger.Printf("Input Text: %s\n", text)
 
 	// 1) 关键词命中优先
 	var (

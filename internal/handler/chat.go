@@ -389,6 +389,25 @@ func (h *ChatHandler) executeChatRequest(ctx context.Context, payload map[string
 	}
 }
 
+var (
+	// 全局复用 HTTP Client，避免每次新建
+	globalHTTPClient = &http.Client{
+		Timeout: 30 * time.Minute, // 上游可能有长时间推理任务
+		Transport: &http.Transport{
+			Proxy: http.ProxyFromEnvironment,
+			DialContext: (&net.Dialer{
+				Timeout:   30 * time.Second,
+				KeepAlive: 30 * time.Second,
+			}).DialContext,
+			ForceAttemptHTTP2:     true,
+			MaxIdleConns:          100,
+			IdleConnTimeout:       90 * time.Second,
+			TLSHandshakeTimeout:   10 * time.Second,
+			ExpectContinueTimeout: 1 * time.Second,
+		},
+	}
+)
+
 func executeOpenAIChatPassthrough(ctx context.Context, payload map[string]any, opts messages.ExecuteOptions) (int, string, []byte, io.ReadCloser, error) {
 	reqBody, err := json.Marshal(payload)
 	if err != nil {
@@ -410,7 +429,7 @@ func executeOpenAIChatPassthrough(ctx context.Context, payload map[string]any, o
 		req.Header.Set("Authorization", "Bearer "+opts.APIKey)
 	}
 
-	resp, err := (&http.Client{Timeout: 30 * time.Minute}).Do(req)
+	resp, err := globalHTTPClient.Do(req)
 	if err != nil {
 		return 0, "", nil, nil, fmt.Errorf("chat: upstream request: %w", err)
 	}
@@ -420,7 +439,7 @@ func executeOpenAIChatPassthrough(ctx context.Context, payload map[string]any, o
 	}
 
 	defer resp.Body.Close()
-	body, _ := io.ReadAll(resp.Body)
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 10*1024*1024)) // 限制最大读取 10MB，避免恶意大响应导致 OOM
 
 	// 打印上游原始响应（用于调试）
 	bodyPreview := string(body)
@@ -463,7 +482,7 @@ func executeOpenAIChatViaAnthropic(ctx context.Context, payload map[string]any, 
 		req.Header.Set("x-api-key", opts.APIKey)
 	}
 
-	resp, err := (&http.Client{Timeout: 30 * time.Minute}).Do(req)
+	resp, err := globalHTTPClient.Do(req)
 	if err != nil {
 		return 0, "", nil, nil, fmt.Errorf("chat: upstream request: %w", err)
 	}
@@ -471,11 +490,11 @@ func executeOpenAIChatViaAnthropic(ctx context.Context, payload map[string]any, 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		defer resp.Body.Close()
 		body, _ := io.ReadAll(resp.Body)
-		bodyPreview := string(body)
-		if len(bodyPreview) > 2000 {
-			bodyPreview = bodyPreview[:2000] + "...(truncated)"
-		}
-		utils.Logger.Debugf("[ClaudeRouter] chat: anthropic upstream error status=%d body=%s", resp.StatusCode, bodyPreview)
+		//bodyPreview := string(body)
+		//if len(bodyPreview) > 2000 {
+		//	bodyPreview = bodyPreview[:2000] + "...(truncated)"
+		//}
+		//utils.Logger.Debugf("[ClaudeRouter] chat: anthropic upstream error status=%d body=%s", resp.StatusCode, bodyPreview)
 		return resp.StatusCode, resp.Header.Get("Content-Type"), body, nil, fmt.Errorf("chat: upstream error status=%d", resp.StatusCode)
 	}
 
@@ -551,7 +570,7 @@ func executeOpenAIChatViaOpenAIResponses(ctx context.Context, payload map[string
 		req.Header.Set("Authorization", "Bearer "+opts.APIKey)
 	}
 
-	resp, err := (&http.Client{Timeout: 30 * time.Minute}).Do(req)
+	resp, err := globalHTTPClient.Do(req)
 	if err != nil {
 		return 0, "", nil, nil, fmt.Errorf("chat: upstream request: %w", err)
 	}
@@ -559,11 +578,11 @@ func executeOpenAIChatViaOpenAIResponses(ctx context.Context, payload map[string
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		defer resp.Body.Close()
 		body, _ := io.ReadAll(resp.Body)
-		bodyPreview := string(body)
-		if len(bodyPreview) > 2000 {
-			bodyPreview = bodyPreview[:2000] + "...(truncated)"
-		}
-		utils.Logger.Debugf("[ClaudeRouter] chat: responses upstream error status=%d body=%s", resp.StatusCode, bodyPreview)
+		//bodyPreview := string(body)
+		//if len(bodyPreview) > 2000 {
+		//	bodyPreview = bodyPreview[:2000] + "...(truncated)"
+		//}
+		//utils.Logger.Debugf("[ClaudeRouter] chat: responses upstream error status=%d body=%s", resp.StatusCode, bodyPreview)
 		return resp.StatusCode, resp.Header.Get("Content-Type"), body, nil, fmt.Errorf("chat: upstream error status=%d", resp.StatusCode)
 	}
 

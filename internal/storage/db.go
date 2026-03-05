@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/glebarez/sqlite"
 	"gorm.io/driver/mysql"
@@ -44,6 +45,8 @@ func Init(driver, dsn string) (*gorm.DB, error) {
 		if err == nil {
 			sqlDB.SetMaxIdleConns(10)
 			sqlDB.SetMaxOpenConns(100)
+			sqlDB.SetConnMaxLifetime(time.Hour)
+			sqlDB.SetConnMaxIdleTime(30 * time.Minute)
 		}
 	case "sqlite", "":
 		if err := ensureSQLiteDir(dsn); err != nil {

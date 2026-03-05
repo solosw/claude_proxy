@@ -25,7 +25,14 @@ type Config struct {
 	} `yaml:"server"`
 
 	Log struct {
-		Level string `yaml:"level"`
+		Level      string `yaml:"level"`
+		Format     string `yaml:"format"`      // json, console
+		Async      bool   `yaml:"async"`       // 是否异步
+		FilePath   string `yaml:"file_path"`   // 文件路径
+		MaxSize    int    `yaml:"max_size"`    // 每个日志文件大小(MB)
+		MaxBackups int    `yaml:"max_backups"` // 保留备份数
+		MaxAge     int    `yaml:"max_age"`     // 保留天数
+		Compress   bool   `yaml:"compress"`    // 是否压缩
 	} `yaml:"log"`
 
 	Database struct {
