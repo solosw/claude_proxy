@@ -1,6 +1,6 @@
 server:
   addr: "localhost:8090"
-  debug: false
+  debug: true
 gui:
   enabled: false
 log:

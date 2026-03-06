@@ -16,13 +16,17 @@ import (
 	"github.com/openai/openai-go/v3/shared"
 
 	"awesomeProject/internal/model"
-	"awesomeProject/internal/provider"
 	"awesomeProject/pkg/utils"
 )
 
 // ChatTestHandler 用于前端对单个模型进行聊天测试（支持 SSE）。
 type ChatTestHandler struct {
 }
+
+const (
+	cherryStudioUserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) CherryStudio/1.7.19 Chrome/140.0.7339.249 Electron/38.7.0 Safari/537.36"
+	codexUserAgent        = "codex_cli_rs/0.57.0 (Windows 10.0.26200; x86_64) zed/0.222.4_stable.147.b385025df963c9e8c3f74cc4dadb1c4b29b3c6f0"
+)
 
 func NewChatTestHandler() *ChatTestHandler {
 	return &ChatTestHandler{}
@@ -84,6 +88,11 @@ func (h *ChatTestHandler) handleChatTest(c *gin.Context) {
 		upstreamModel = m.ID
 	}
 
+	userAgent := cherryStudioUserAgent
+	if interfaceType == "openai_responses" {
+		userAgent = codexUserAgent
+	}
+
 	switch interfaceType {
 	case "anthropic":
 		if baseURL == "" {
@@ -94,7 +103,7 @@ func (h *ChatTestHandler) handleChatTest(c *gin.Context) {
 			return
 		}
 		client := &http.Client{Timeout: timeout}
-		h.proxyAnthropicMessages(c, client, baseURL, apiKey, upstreamModel, req)
+		h.proxyAnthropicMessages(c, client, baseURL, apiKey, upstreamModel, req, userAgent)
 		return
 	case "openai_responses":
 		if baseURL == "" {
@@ -105,52 +114,14 @@ func (h *ChatTestHandler) handleChatTest(c *gin.Context) {
 			return
 		}
 		httpClient := &http.Client{Timeout: timeout}
-		h.proxyOpenAIResponsesWithSDK(c, httpClient, baseURL, apiKey, upstreamModel, req)
+		h.proxyOpenAIResponsesWithSDK(c, httpClient, baseURL, apiKey, upstreamModel, req, userAgent)
 		return
 	case "openai", "openai_compatible":
 		if baseURL == "" {
 			baseURL = "https://api.openai.com/v1"
 		}
-		oai := provider.NewOpenAI(provider.OpenAIConfig{
-			Name:           "chat-test",
-			APIKey:         apiKey,
-			BaseURL:        baseURL,
-			TimeoutSeconds: 600,
-		})
-
-		utils.Logger.Printf("model:%v", upstreamModel)
-		chatReq := &provider.ChatRequest{
-			Model:     upstreamModel,
-			MaxTokens: req.MaxTokens,
-			Stream:    req.Stream,
-		}
-		if req.Temperature != nil {
-			temp := float32(*req.Temperature)
-			chatReq.Temperature = &temp
-		}
-		msgs := make([]provider.ChatMessage, 0, len(req.Messages))
-		for _, m := range req.Messages {
-			msgs = append(msgs, provider.ChatMessage{Role: m.Role, Content: m.Content})
-		}
-		chatReq.Messages = msgs
-
-		if req.Stream {
-			body, err := oai.ChatStream(c.Request.Context(), chatReq)
-			if err != nil {
-				c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
-				return
-			}
-			utils.ProxySSE(c, body)
-			return
-		}
-
-		resp, err := oai.Chat(c.Request.Context(), chatReq)
-		if err != nil {
-			c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
-			return
-		}
-
-		c.JSON(http.StatusOK, resp)
+		client := &http.Client{Timeout: timeout}
+		h.proxyOpenAIChatCompletions(c, client, baseURL, apiKey, upstreamModel, req, userAgent)
 		return
 	default:
 		c.JSON(http.StatusBadRequest, gin.H{"error": "unsupported interface_type: " + interfaceType})
@@ -165,6 +136,7 @@ func (h *ChatTestHandler) proxyOpenAIChatCompletions(
 	apiKey string,
 	upstreamModel string,
 	req chatTestRequest,
+	userAgent string,
 ) {
 	type msg struct {
 		Role    string `json:"role"`
@@ -203,6 +175,7 @@ func (h *ChatTestHandler) proxyOpenAIChatCompletions(
 		return
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("User-Agent", userAgent)
 	if req.Stream {
 		httpReq.Header.Set("Accept", "text/event-stream")
 	}
@@ -244,6 +217,7 @@ func (h *ChatTestHandler) proxyAnthropicMessages(
 	apiKey string,
 	upstreamModel string,
 	req chatTestRequest,
+	userAgent string,
 ) {
 	type block struct {
 		Type string `json:"type"`
@@ -294,6 +268,7 @@ func (h *ChatTestHandler) proxyAnthropicMessages(
 		return
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("User-Agent", userAgent)
 	if req.Stream {
 		httpReq.Header.Set("Accept", "text/event-stream")
 	}
@@ -337,12 +312,14 @@ func (h *ChatTestHandler) proxyOpenAIResponsesWithSDK(
 	apiKey string,
 	upstreamModel string,
 	req chatTestRequest,
+	userAgent string,
 ) {
 	ctx := c.Request.Context()
 	client := openai.NewClient(
 		option.WithAPIKey(apiKey),
 		option.WithBaseURL(baseURL),
 		option.WithHTTPClient(httpClient),
+		option.WithHeader("User-Agent", userAgent),
 	)
 
 	// 将 messages 转为 Responses API 的 input（OfInputItemList）

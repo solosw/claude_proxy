@@ -1,6 +1,7 @@
 package gui
 
 import (
+	"awesomeProject/pkg/utils"
 	"log"
 	"os"
 	"os/exec"

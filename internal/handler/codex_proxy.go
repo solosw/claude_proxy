@@ -184,7 +184,7 @@ func (h *CodexProxyHandler) handleResponses(c *gin.Context) {
 		}
 		_ = model.RecordErrorLog(targetModel.ID, username, statusCode, execErr.Error())
 		if statusCode >= 400 {
-			openaiErrorFromBody(c, statusCode, body)
+			openaiErrorFromBody(c, statusCode, body, originalComboID)
 			return
 		}
 		openaiError(c, http.StatusBadGateway, "api_error", execErr.Error())
@@ -211,7 +211,7 @@ func (h *CodexProxyHandler) handleResponses(c *gin.Context) {
 			username = u.Username
 		}
 		_ = model.RecordErrorLog(targetModel.ID, username, statusCode, fmt.Sprintf("upstream error status=%d", statusCode))
-		openaiErrorFromBody(c, statusCode, body)
+		openaiErrorFromBody(c, statusCode, body, originalComboID)
 		return
 	}
 

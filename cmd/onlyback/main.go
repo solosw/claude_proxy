@@ -11,6 +11,7 @@ import (
 	"awesomeProject/pkg/utils"
 	"github.com/gin-gonic/gin"
 	"log"
+	"net/http"
 	"strings"
 )
 
@@ -31,7 +32,36 @@ func main() {
 	router.Use(gin.Recovery())
 	router.Use(middleware.Cors())
 	router.Use(middleware.GzipMiddleware())
+	router.Use(func(c *gin.Context) {
+		path := c.Request.URL.Path
 
+		// 跳过已带 /back、静态资源、根路径、API 以外的路径
+		if strings.HasPrefix(path, "/back") ||
+			strings.HasPrefix(path, "/assets") ||
+			strings.HasPrefix(path, "/css") ||
+			strings.HasPrefix(path, "/js") ||
+			strings.HasPrefix(path, "/api/") ||
+			path == "/" ||
+			strings.Contains(path, ".") {
+			c.Next()
+			return
+		}
+		// 只对 /v1/ 开头的 API 路径做重定向
+		if strings.HasPrefix(path, "/v1/") {
+			utils.Logger.Debugf("%s %s", c.Request.Method, path)
+			target := "/back" + path
+
+			// 保留查询参数
+			if c.Request.URL.RawQuery != "" {
+				target += "?" + c.Request.URL.RawQuery
+			}
+
+			c.Redirect(http.StatusPermanentRedirect, target)
+			c.Abort()
+			return
+		}
+		c.Next()
+	})
 	webGroup := router.Group("/")
 	webGroup.Use(func(c *gin.Context) {
 		if strings.HasPrefix(c.Request.URL.Path, "/assets") ||

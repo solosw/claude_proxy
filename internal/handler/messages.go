@@ -57,13 +57,19 @@ func (h *MessagesHandler) handleOptions(c *gin.Context) {
 }
 
 // anthropicError 按 Claude API 文档返回错误体：{"type":"error","error":{"type":"...","message":"..."}}
-func anthropicError(c *gin.Context, status int, errorType, message string) {
+func anthropicError(c *gin.Context, status int, errorType, message string, responseModel ...string) {
+	errObj := gin.H{
+		"type":    errorType,
+		"message": message,
+	}
+	if len(responseModel) > 0 {
+		if modelName := strings.TrimSpace(responseModel[0]); modelName != "" {
+			errObj["model"] = modelName
+		}
+	}
 	c.JSON(status, gin.H{
-		"type": "error",
-		"error": gin.H{
-			"type":    errorType,
-			"message": message,
-		},
+		"type":  "error",
+		"error": errObj,
 	})
 }
 
@@ -100,7 +106,7 @@ func extractUpstreamErrorMessage(body []byte) string {
 }
 
 // anthropicErrorFromBody 根据上游状态码和 body 按 Claude 格式返回错误（对话过程中上游 4xx/5xx 时使用）。
-func anthropicErrorFromBody(c *gin.Context, statusCode int, body []byte) {
+func anthropicErrorFromBody(c *gin.Context, statusCode int, body []byte, responseModel ...string) {
 	message := extractUpstreamErrorMessage(body)
 	errorType := "api_error"
 	if statusCode >= 400 && statusCode < 500 {
@@ -111,6 +117,10 @@ func anthropicErrorFromBody(c *gin.Context, statusCode int, body []byte) {
 	}
 	if statusCode == 429 {
 		errorType = "rate_limit_error"
+	}
+	if len(responseModel) > 0 {
+		anthropicError(c, statusCode, errorType, message, responseModel[0])
+		return
 	}
 	anthropicError(c, statusCode, errorType, message)
 }
@@ -437,7 +447,7 @@ func (h *MessagesHandler) handleMessages(c *gin.Context) {
 		if statusCode >= 400 {
 			upstreamMsg := extractUpstreamErrorMessage(body)
 			utils.Logger.Warnf("[ClaudeRouter] messages: step=upstream_error status=%d message=%s", statusCode, upstreamMsg)
-			anthropicErrorFromBody(c, statusCode, body)
+			anthropicErrorFromBody(c, statusCode, body, originalComboID)
 			return
 		}
 		anthropicError(c, http.StatusBadGateway, "api_error", err.Error())
@@ -468,7 +478,7 @@ func (h *MessagesHandler) handleMessages(c *gin.Context) {
 
 		upstreamMsg := extractUpstreamErrorMessage(body)
 		utils.Logger.Warnf("[ClaudeRouter] messages: step=upstream_error status=%d message=%s", statusCode, upstreamMsg)
-		anthropicErrorFromBody(c, statusCode, body)
+		anthropicErrorFromBody(c, statusCode, body, originalComboID)
 		return
 	}
 

@@ -51,16 +51,20 @@ func (h *ChatHandler) handleOptions(c *gin.Context) {
 	c.Status(http.StatusNoContent)
 }
 
-func openaiError(c *gin.Context, status int, errorType, message string) {
-	c.JSON(status, gin.H{
-		"error": gin.H{
-			"type":    errorType,
-			"message": message,
-		},
-	})
+func openaiError(c *gin.Context, status int, errorType, message string, responseModel ...string) {
+	errObj := gin.H{
+		"type":    errorType,
+		"message": message,
+	}
+	if len(responseModel) > 0 {
+		if modelName := strings.TrimSpace(responseModel[0]); modelName != "" {
+			errObj["model"] = modelName
+		}
+	}
+	c.JSON(status, gin.H{"error": errObj})
 }
 
-func openaiErrorFromBody(c *gin.Context, statusCode int, body []byte) {
+func openaiErrorFromBody(c *gin.Context, statusCode int, body []byte, responseModel ...string) {
 	message := extractUpstreamErrorMessage(body)
 	errorType := "api_error"
 	switch {
@@ -70,6 +74,10 @@ func openaiErrorFromBody(c *gin.Context, statusCode int, body []byte) {
 		errorType = "rate_limit_error"
 	case statusCode >= 400 && statusCode < 500:
 		errorType = "invalid_request_error"
+	}
+	if len(responseModel) > 0 {
+		openaiError(c, statusCode, errorType, message, responseModel[0])
+		return
 	}
 	openaiError(c, statusCode, errorType, message)
 }
@@ -193,7 +201,7 @@ func (h *ChatHandler) handleChatCompletions(c *gin.Context) {
 		}
 		_ = model.RecordErrorLog(targetModel.ID, username, statusCode, execErr.Error())
 		if statusCode >= 400 {
-			openaiErrorFromBody(c, statusCode, body)
+			openaiErrorFromBody(c, statusCode, body, originalComboID)
 			return
 		}
 		openaiError(c, http.StatusBadGateway, "api_error", execErr.Error())
@@ -220,7 +228,7 @@ func (h *ChatHandler) handleChatCompletions(c *gin.Context) {
 			username = u.Username
 		}
 		_ = model.RecordErrorLog(targetModel.ID, username, statusCode, fmt.Sprintf("upstream error status=%d", statusCode))
-		openaiErrorFromBody(c, statusCode, body)
+		openaiErrorFromBody(c, statusCode, body, originalComboID)
 		return
 	}
 
