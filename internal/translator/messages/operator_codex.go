@@ -51,6 +51,9 @@ func (s *CodexStrategy) Execute(ctx context.Context, payload map[string]any, opt
 		return 0, "", nil, nil, fmt.Errorf("operator codex: create request failed: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
+	if strings.TrimSpace(opts.UserAgent) != "" {
+		req.Header.Set("User-Agent", opts.UserAgent)
+	}
 	if opts.Stream {
 		req.Header.Set("Accept", "text/event-stream")
 	} else {

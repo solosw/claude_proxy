@@ -384,6 +384,11 @@ func (h *MessagesHandler) handleMessages(c *gin.Context) {
 		APIKey:        apiKey,
 		BaseURL:       baseURL,
 		Stream:        stream,
+		// 根据 interfaceType 选择 User-Agent
+		UserAgent: cherryStudioUserAgent,
+	}
+	if strings.EqualFold(interfaceType, "openai_responses") {
+		opts.UserAgent = codexUserAgent
 	}
 
 	// 策略分发：有运营商则走该运营商的独立转发策略，否则走 interface_type 适配器（openai/anthropic）

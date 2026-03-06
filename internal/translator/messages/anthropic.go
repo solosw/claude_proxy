@@ -38,9 +38,18 @@ func (a *AnthropicAdapter) Execute(ctx context.Context, payload map[string]any, 
 	}
 	logStep("anthropic adapter: creating client baseURL=%s", baseURL)
 
+	httpClient := &http.Client{Timeout: 600 * time.Second}
+	// 如果提供了 User-Agent，使用自定义 Transport 添加
+	if strings.TrimSpace(opts.UserAgent) != "" {
+		httpClient.Transport = &userAgentTransport{
+			base:      httpClient.Transport,
+			userAgent: opts.UserAgent,
+		}
+	}
 	clientOpts := []option.RequestOption{
 		option.WithBaseURL(baseURL),
 		option.WithRequestTimeout(600 * time.Second),
+		option.WithHTTPClient(httpClient),
 	}
 	if opts.APIKey != "" {
 		clientOpts = append(clientOpts, option.WithAPIKey(opts.APIKey))

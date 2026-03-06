@@ -46,6 +46,9 @@ func (a *OpenAICompatibleSDKAdapter) Execute(ctx context.Context, payload map[st
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "text/event-stream")
+	if strings.TrimSpace(opts.UserAgent) != "" {
+		req.Header.Set("User-Agent", opts.UserAgent)
+	}
 	if strings.TrimSpace(opts.APIKey) != "" {
 		req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(opts.APIKey))
 	}

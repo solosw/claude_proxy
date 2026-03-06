@@ -26,7 +26,9 @@ import (
 	_ "github.com/router-for-me/CLIProxyAPI/v6/sdk/translator/builtin"
 )
 
-const codexDefaultBaseURL = "https://chatgpt.com/backend-api"
+const (
+	codexDefaultBaseURL = "https://chatgpt.com/backend-api"
+)
 
 // CodexProxyHandler 直接透传 OpenAI Responses API 到 Codex 上游。
 type CodexProxyHandler struct {
@@ -154,6 +156,12 @@ func (h *CodexProxyHandler) handleResponses(c *gin.Context) {
 	utils.Logger.Debugf("[ClaudeRouter] responses: step=execute interface=%s model=%s upstream=%s stream=%v adapter=%s",
 		interfaceType, targetModel.ID, upstreamModel, stream, adapterMode)
 
+	// 根据 interfaceType 选择 User-Agent
+	userAgent := cherryStudioUserAgent
+	if strings.EqualFold(interfaceType, "openai_responses") {
+		userAgent = codexUserAgent
+	}
+
 	statusCode, contentType, body, streamBody, execErr := h.executeResponsesRequest(
 		c.Request.Context(),
 		payloadToSend,
@@ -164,6 +172,7 @@ func (h *CodexProxyHandler) handleResponses(c *gin.Context) {
 			Stream:        stream,
 		},
 		adapterMode,
+		userAgent,
 	)
 
 	if execErr != nil {
@@ -1187,12 +1196,12 @@ func (h *CodexProxyHandler) resolveResponsesEndpoint(m *model.Model) (interfaceT
 	return interfaceType, baseURL, apiKey, nil
 }
 
-func (h *CodexProxyHandler) executeResponsesRequest(ctx context.Context, payload map[string]any, opts messages.ExecuteOptions, adapterMode string) (int, string, []byte, io.ReadCloser, error) {
+func (h *CodexProxyHandler) executeResponsesRequest(ctx context.Context, payload map[string]any, opts messages.ExecuteOptions, adapterMode string, userAgent string) (int, string, []byte, io.ReadCloser, error) {
 	switch {
 	case strings.HasPrefix(adapterMode, "adapt_"):
-		return executeResponsesViaSDKAdapter(ctx, payload, opts, adapterMode)
+		return executeResponsesViaSDKAdapter(ctx, payload, opts, adapterMode, userAgent)
 	case strings.HasPrefix(adapterMode, "passthrough"):
-		return executeResponsesPassthrough(ctx, payload, opts)
+		return executeResponsesPassthrough(ctx, payload, opts, userAgent)
 	default:
 		return http.StatusBadRequest, "application/json", nil, nil, fmt.Errorf("unsupported adapter_mode: %s", adapterMode)
 	}
@@ -1217,7 +1226,7 @@ var (
 	}
 )
 
-func executeResponsesPassthrough(ctx context.Context, payload map[string]any, opts messages.ExecuteOptions) (int, string, []byte, io.ReadCloser, error) {
+func executeResponsesPassthrough(ctx context.Context, payload map[string]any, opts messages.ExecuteOptions, userAgent string) (int, string, []byte, io.ReadCloser, error) {
 	reqBody, err := json.Marshal(payload)
 	if err != nil {
 		return 0, "", nil, nil, fmt.Errorf("responses: marshal payload: %w", err)
@@ -1240,6 +1249,7 @@ func executeResponsesPassthrough(ctx context.Context, payload map[string]any, op
 			break
 		}
 		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("User-Agent", userAgent)
 		if opts.Stream {
 			req.Header.Set("Accept", "text/event-stream")
 		} else {
@@ -1331,6 +1341,7 @@ func executeResponsesViaSDKAdapter(
 	payload map[string]any,
 	opts messages.ExecuteOptions,
 	adapterMode string,
+	userAgent string,
 ) (statusCode int, contentType string, body []byte, streamBody io.ReadCloser, err error) {
 	originalReqRaw, translatedReqRaw, translateErr := messages.TranslateResponsesRequestForAdapter(payload, opts.UpstreamModel, opts.Stream, adapterMode)
 	if translateErr != nil {
@@ -1346,6 +1357,7 @@ func executeResponsesViaSDKAdapter(
 	if reqErr != nil {
 		return 0, "", nil, nil, fmt.Errorf("responses: create request: %w", reqErr)
 	}
+	req.Header.Set("User-Agent", userAgent)
 	for k, v := range reqHeaders {
 		req.Header.Set(k, v)
 	}
@@ -1364,7 +1376,7 @@ func executeResponsesViaSDKAdapter(
 
 	if statusCode < 200 || statusCode >= 300 {
 		defer resp.Body.Close()
-	body, _ = io.ReadAll(io.LimitReader(resp.Body, 10*1024*1024)) // 限制最大读取 10MB
+		body, _ = io.ReadAll(io.LimitReader(resp.Body, 10*1024*1024)) // 限制最大读取 10MB
 		if len(body) == 0 {
 			body, _ = json.Marshal(gin.H{"error": fmt.Sprintf("upstream error status=%d", statusCode)})
 		}

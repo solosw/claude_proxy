@@ -129,6 +129,14 @@ func (a *OpenAIAdapter) Execute(ctx context.Context, payload map[string]any, opt
 	cfg := openai.DefaultConfig(opts.APIKey)
 	cfg.BaseURL = baseURL
 	cfg.HTTPClient = &http.Client{Timeout: 600 * time.Second}
+
+	// 如果提供了 User-Agent，使用自定义 Transport 添加
+	//if strings.TrimSpace(opts.UserAgent) != "" {
+	//	cfg.HTTPClient。 = &userAgentTransport{
+	//		base:      cfg.HTTPClient.Transport,
+	//		userAgent: opts.UserAgent,
+	//	}
+	//}
 	client := openai.NewClientWithConfig(cfg)
 
 	// 调试输出：发送给上游的请求体
@@ -340,9 +348,9 @@ func convertOpenAIStreamToAnthropicWriter(ctx context.Context, stream *openai.Ch
 						"type":  "content_block_start",
 						"index": idx,
 						"content_block": map[string]any{
-							"type":  "tool_use",
-							"id":    tc.ID,
-							"name":  tc.Function.Name,
+							"type": "tool_use",
+							"id":   tc.ID,
+							"name": tc.Function.Name,
 							"input": map[string]any{
 								// 具体 JSON 由后续 input_json_delta 补齐
 							},
@@ -862,9 +870,9 @@ func ConvertOpenAIStreamReaderToAnthropic(ctx context.Context, r io.Reader, w io
 						"type":  "content_block_start",
 						"index": idx,
 						"content_block": map[string]any{
-							"type":  "tool_use",
-							"id":    tc.ID,
-							"name":  tc.Function.Name,
+							"type": "tool_use",
+							"id":   tc.ID,
+							"name": tc.Function.Name,
 							"input": map[string]any{
 								// 具体 JSON 由后续 input_json_delta 补齐
 							},

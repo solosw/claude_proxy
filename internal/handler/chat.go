@@ -8,6 +8,7 @@ import (
 	"awesomeProject/internal/modelstate"
 	"awesomeProject/internal/translator/messages"
 	"awesomeProject/pkg/utils"
+	_ "bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -16,6 +17,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+
 	"strings"
 	"time"
 
@@ -385,13 +387,19 @@ func (h *ChatHandler) resolveChatEndpoint(targetModel *model.Model) (interfaceTy
 }
 
 func (h *ChatHandler) executeChatRequest(ctx context.Context, payload map[string]any, opts messages.ExecuteOptions, interfaceType string) (int, string, []byte, io.ReadCloser, error) {
+	// 根据 interfaceType 选择 User-Agent
+	userAgent := cherryStudioUserAgent
+	if strings.EqualFold(interfaceType, "openai_responses") {
+		userAgent = codexUserAgent
+	}
+
 	switch {
 	case strings.EqualFold(interfaceType, "openai") || strings.EqualFold(interfaceType, "openai_compatible"):
-		return executeOpenAIChatPassthrough(ctx, payload, opts)
+		return executeOpenAIChatPassthrough(ctx, payload, opts, userAgent)
 	case strings.EqualFold(interfaceType, "anthropic"):
-		return executeOpenAIChatViaAnthropic(ctx, payload, opts)
+		return executeOpenAIChatViaAnthropic(ctx, payload, opts, userAgent)
 	case strings.EqualFold(interfaceType, "openai_responses"):
-		return executeOpenAIChatViaOpenAIResponses(ctx, payload, opts)
+		return executeOpenAIChatViaOpenAIResponses(ctx, payload, opts, userAgent)
 	default:
 		return http.StatusBadRequest, "application/json", nil, nil, fmt.Errorf("unsupported interface_type: %s", interfaceType)
 	}
@@ -416,7 +424,7 @@ var (
 	}
 )
 
-func executeOpenAIChatPassthrough(ctx context.Context, payload map[string]any, opts messages.ExecuteOptions) (int, string, []byte, io.ReadCloser, error) {
+func executeOpenAIChatPassthrough(ctx context.Context, payload map[string]any, opts messages.ExecuteOptions, userAgent string) (int, string, []byte, io.ReadCloser, error) {
 	reqBody, err := json.Marshal(payload)
 	if err != nil {
 		return 0, "", nil, nil, fmt.Errorf("chat: marshal payload: %w", err)
@@ -430,6 +438,7 @@ func executeOpenAIChatPassthrough(ctx context.Context, payload map[string]any, o
 		return 0, "", nil, nil, fmt.Errorf("chat: create request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("User-Agent", userAgent)
 	if opts.Stream {
 		req.Header.Set("Accept", "text/event-stream")
 	}
@@ -462,7 +471,7 @@ func executeOpenAIChatPassthrough(ctx context.Context, payload map[string]any, o
 	return resp.StatusCode, "application/json", body, nil, nil
 }
 
-func executeOpenAIChatViaAnthropic(ctx context.Context, payload map[string]any, opts messages.ExecuteOptions) (int, string, []byte, io.ReadCloser, error) {
+func executeOpenAIChatViaAnthropic(ctx context.Context, payload map[string]any, opts messages.ExecuteOptions, userAgent string) (int, string, []byte, io.ReadCloser, error) {
 	originalReq, err := json.Marshal(payload)
 	if err != nil {
 		return 0, "", nil, nil, fmt.Errorf("chat: marshal payload: %w", err)
@@ -484,6 +493,7 @@ func executeOpenAIChatViaAnthropic(ctx context.Context, payload map[string]any, 
 		return 0, "", nil, nil, fmt.Errorf("chat: create request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("User-Agent", userAgent)
 	req.Header.Set("Accept", "text/event-stream")
 	req.Header.Set("anthropic-version", "2023-06-01")
 	if opts.APIKey != "" {
@@ -547,7 +557,7 @@ func executeOpenAIChatViaAnthropic(ctx context.Context, payload map[string]any, 
 	return resp.StatusCode, "application/json", convertedBody, nil, nil
 }
 
-func executeOpenAIChatViaOpenAIResponses(ctx context.Context, payload map[string]any, opts messages.ExecuteOptions) (int, string, []byte, io.ReadCloser, error) {
+func executeOpenAIChatViaOpenAIResponses(ctx context.Context, payload map[string]any, opts messages.ExecuteOptions, userAgent string) (int, string, []byte, io.ReadCloser, error) {
 	originalReq, err := json.Marshal(payload)
 	if err != nil {
 		return 0, "", nil, nil, fmt.Errorf("chat: marshal payload: %w", err)
@@ -569,6 +579,7 @@ func executeOpenAIChatViaOpenAIResponses(ctx context.Context, payload map[string
 		return 0, "", nil, nil, fmt.Errorf("chat: create request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("User-Agent", userAgent)
 	if opts.Stream {
 		req.Header.Set("Accept", "text/event-stream")
 	} else {

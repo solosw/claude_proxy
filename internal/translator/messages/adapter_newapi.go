@@ -85,6 +85,9 @@ func (a *NewAPIAdapter) Execute(ctx context.Context, payload map[string]any, opt
 		return 0, "", nil, nil, err
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
+	if strings.TrimSpace(opts.UserAgent) != "" {
+		httpReq.Header.Set("User-Agent", opts.UserAgent)
+	}
 	if opts.APIKey != "" {
 		httpReq.Header.Set("Authorization", "Bearer "+opts.APIKey)
 	}

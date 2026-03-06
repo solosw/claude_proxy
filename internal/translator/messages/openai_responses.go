@@ -17,6 +17,19 @@ import (
 	"github.com/openai/openai-go/v3/shared/constant"
 )
 
+// userAgentTransport 自定义 Transport，用于在 HTTP 请求中添加 User-Agent
+type userAgentTransport struct {
+	base      http.RoundTripper
+	userAgent string
+}
+
+func (t *userAgentTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	if t.userAgent != "" {
+		req.Header.Set("User-Agent", t.userAgent)
+	}
+	return t.base.RoundTrip(req)
+}
+
 // OpenAIResponsesAdapter 协议适配器：将入口的 Anthropic /v1/messages 请求转为 OpenAI Responses API（/v1/responses）请求并转发，
 // 使用与 chat_test_handler 相同的 openai-go SDK 构建请求体，保证与官方序列化一致，避免网关兼容性问题。
 // 返回的 body/stream 为 OpenAI Responses 格式，由 handler 按 response_format 再转为 Anthropic（如需）。
@@ -186,6 +199,13 @@ func (a *OpenAIResponsesAdapter) Execute(ctx context.Context, payload map[string
 
 	// 使用 OpenAI SDK 客户端,与 chat_test_handler 完全一致
 	httpClient := &http.Client{Timeout: 30 * time.Minute}
+	// 如果提供了 User-Agent，使用自定义 Transport 添加
+	if strings.TrimSpace(opts.UserAgent) != "" {
+		httpClient.Transport = &userAgentTransport{
+			base:      httpClient.Transport,
+			userAgent: opts.UserAgent,
+		}
+	}
 	client := openai.NewClient(
 		option.WithAPIKey(opts.APIKey),
 		option.WithBaseURL(baseURL),

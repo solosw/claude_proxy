@@ -53,6 +53,9 @@ func (s *MinimaxStrategy) Execute(ctx context.Context, payload map[string]any, o
 		return 0, "", nil, nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
+	if strings.TrimSpace(opts.UserAgent) != "" {
+		req.Header.Set("User-Agent", opts.UserAgent)
+	}
 	if opts.APIKey != "" {
 		req.Header.Set("Authorization", "Bearer "+opts.APIKey)
 	}
