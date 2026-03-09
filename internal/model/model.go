@@ -71,3 +71,26 @@ type ErrorLog struct {
 	ErrorMsg   string    `json:"error_msg" gorm:"size:2048;not null;default:''"`
 	CreatedAt  time.Time `json:"created_at" gorm:"index"`
 }
+
+// RedeemCode 兑换码表
+type RedeemCode struct {
+	ID          int64      `json:"id" gorm:"primaryKey;autoIncrement"`
+	Code        string     `json:"code" gorm:"uniqueIndex;size:100;not null"` // 兑换码（唯一）
+	Quota       float64    `json:"quota" gorm:"not null"`                      // 可兑换的额度
+	MaxUses     int        `json:"max_uses" gorm:"not null;default:1"`         // 最大使用次数（1=单次，>1=多次）
+	UsedCount   int        `json:"used_count" gorm:"not null;default:0"`       // 已使用次数
+	ExpireAt    *time.Time `json:"expire_at"`                                  // 过期时间（nil=永不过期）
+	Description string     `json:"description" gorm:"size:500"`                // 描述信息
+	CreatedBy   string     `json:"created_by" gorm:"size:100;not null"`        // 创建者用户名
+	CreatedAt   time.Time  `json:"created_at"`
+	UpdatedAt   time.Time  `json:"updated_at"`
+}
+
+// RedeemLog 兑换记录表
+type RedeemLog struct {
+	ID        int64     `json:"id" gorm:"primaryKey;autoIncrement"`
+	Code      string    `json:"code" gorm:"index;size:100;not null"`     // 兑换码
+	Username  string    `json:"username" gorm:"index;size:100;not null"` // 兑换用户
+	Quota     float64   `json:"quota" gorm:"not null"`                   // 兑换的额度
+	CreatedAt time.Time `json:"created_at" gorm:"index"`                 // 兑换时间
+}

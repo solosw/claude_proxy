@@ -1,8 +1,9 @@
 import { createApp } from 'vue'
 import App from './App.vue'
 import router from "./router/index.js";
-import ElementPlus, {ElMessage} from 'element-plus'
+import ElementPlus, { ElMessage } from 'element-plus'
 import 'element-plus/dist/index.css'
+import 'element-plus/theme-chalk/dark/css-vars.css'
 import 'dayjs/locale/zh-cn'
 import zhCn from 'element-plus/dist/locale/zh-cn.mjs'
 import axios from 'axios'
@@ -18,7 +19,7 @@ import '@fortawesome/fontawesome-free/css/all.min.css';
 VueMarkdownEditor.use(vuepressTheme, {
     Prism,
 });
-const app=createApp(App);
+const app = createApp(App);
 for (const [key, component] of Object.entries(ElementPlusIconsVue)) {
     app.component(key, component)
 }
@@ -33,8 +34,8 @@ axios.loadData = async function (url) {
 };
 axios.interceptors.request.use(function (config) {
 
-    if(localStorage.getItem("token"))
-        config.headers.token =  localStorage.getItem("token");
+    if (localStorage.getItem("token"))
+        config.headers.token = localStorage.getItem("token");
     return config;
 }, function (error) {
     return Promise.reject(error);
@@ -43,15 +44,15 @@ axios.interceptors.request.use(function (config) {
 axios.interceptors.response.use(
     function (response) {
 
-        if(response.data.code==401){
-            ElMessage.error( "登陆异常")
+        if (response.data.code == 401) {
+            ElMessage.error("登陆异常")
             router.push("/login")
-            response.status.code=401
+            response.status.code = 401
             return response;
         }
 
-        if( response.data.success== false){
-            ElMessage.error( response.data.message)
+        if (response.data.success == false) {
+            ElMessage.error(response.data.message)
         }
         // 对响应数据做点什么
         return response;

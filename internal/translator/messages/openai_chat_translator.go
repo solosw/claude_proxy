@@ -76,6 +76,8 @@ func ConvertOpenAIChatToOpenAIResponsesRequest(originalReq []byte, opts OpenAICh
 }
 
 func ConvertOpenAIResponsesToOpenAIChatResponse(ctx context.Context, upstreamModel string, originalReq, translatedReq, completedResp []byte) ([]byte, error) {
+	payload := unwrapOpenAIResponsesEventPayload(completedResp)
+
 	var param any
 	out := sdktranslator.TranslateNonStreamByFormatName(
 		ctx,
@@ -84,13 +86,29 @@ func ConvertOpenAIResponsesToOpenAIChatResponse(ctx context.Context, upstreamMod
 		upstreamModel,
 		originalReq,
 		translatedReq,
-		completedResp,
+		payload,
 		&param,
 	)
-	if strings.TrimSpace(out) == "" {
+	out = strings.TrimSpace(out)
+	if (out == "" || !json.Valid([]byte(out))) && !bytes.Equal(bytes.TrimSpace(payload), bytes.TrimSpace(completedResp)) {
+		out = sdktranslator.TranslateNonStreamByFormatName(
+			ctx,
+			sdktranslator.FormatCodex,
+			sdktranslator.FormatOpenAI,
+			upstreamModel,
+			originalReq,
+			translatedReq,
+			completedResp,
+			&param,
+		)
+		out = strings.TrimSpace(out)
+	}
+	if out == "" {
+		logStep("openai_chat_translator: responses->openai empty output, upstream response=%s", string(completedResp))
 		return nil, fmt.Errorf("translate openai responses to openai chat returned empty output")
 	}
 	if !json.Valid([]byte(out)) {
+		logStep("openai_chat_translator: responses->openai invalid json, translated output=%s", out)
 		return nil, fmt.Errorf("translate openai responses to openai chat returned invalid json")
 	}
 	return []byte(out), nil
@@ -133,6 +151,32 @@ func ReadOpenAIResponsesCompletedEvent(reader io.Reader) ([]byte, error) {
 		return nil, err
 	}
 	return nil, fmt.Errorf("response.completed not found")
+}
+
+func unwrapOpenAIResponsesEventPayload(raw []byte) []byte {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 || !json.Valid(trimmed) {
+		return raw
+	}
+
+	var event map[string]any
+	if err := json.Unmarshal(trimmed, &event); err != nil {
+		return raw
+	}
+
+	resp, hasResp := event["response"]
+	if !hasResp {
+		return raw
+	}
+	respMap, ok := resp.(map[string]any)
+	if !ok || len(respMap) == 0 {
+		return raw
+	}
+	payload, err := json.Marshal(respMap)
+	if err != nil || !json.Valid(payload) {
+		return raw
+	}
+	return payload
 }
 
 func translateOpenAIChatStream(ctx context.Context, from, to sdktranslator.Format, reader io.Reader, writer io.Writer, upstreamModel string, originalReq, translatedReq []byte) error {
@@ -264,5 +308,50 @@ func normalizeOpenAIResponsesRequestPayload(raw []byte, opts OpenAIChatTranslate
 	delete(payload, "previous_response_id")
 	delete(payload, "prompt_cache_retention")
 	delete(payload, "safety_identifier")
+	payload["tools"] = ensureToolSearchForDeferredTools(payload["tools"])
+	if tools, ok := payload["tools"].([]any); ok && len(tools) == 0 {
+		delete(payload, "tools")
+		delete(payload, "tool_choice")
+		delete(payload, "parallel_tool_calls")
+		delete(payload, "tool_constraint")
+	}
 	return json.Marshal(payload)
+}
+
+func ensureToolSearchForDeferredTools(raw any) []any {
+	tools, ok := raw.([]any)
+	if !ok || len(tools) == 0 {
+		return nil
+	}
+
+	hasDeferred := false
+	hasToolSearch := false
+	out := make([]any, 0, len(tools)+1)
+	for _, item := range tools {
+		tool, ok := item.(map[string]any)
+		if !ok {
+			logStep("openai_chat_translator: drop unsupported tool item type=%T", item)
+			continue
+		}
+		cleaned := make(map[string]any, len(tool))
+		for k, v := range tool {
+			key := strings.TrimSpace(strings.ToLower(k))
+			if key == "defer_loading" {
+				if b, ok := v.(bool); ok && b {
+					hasDeferred = true
+				}
+			}
+			cleaned[k] = v
+		}
+		if typ, _ := cleaned["type"].(string); strings.EqualFold(strings.TrimSpace(typ), "tool_search") {
+			hasToolSearch = true
+		}
+		out = append(out, cleaned)
+	}
+
+	if hasDeferred && !hasToolSearch {
+		logStep("openai_chat_translator: detected defer_loading tools without tool_search, auto-injecting tool_search")
+		out = append(out, map[string]any{"type": "tool_search"})
+	}
+	return out
 }

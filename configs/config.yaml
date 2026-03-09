@@ -15,11 +15,11 @@ log:
 
 
 database:
-  driver: sqlite # sqlite 或 mysql
-  dsn: "./data/claude_router.db" # sqlite: 文件路径; mysql: "root:password@tcp(localhost:3306)/claude_router?charset=utf8mb4&parseTime=True&loc=Local"
+#  driver: sqlite # sqlite 或 mysql
+#  dsn: "./data/claude_router.db" # sqlite: 文件路径; mysql: "root:password@tcp(localhost:3306)/claude_router?charset=utf8mb4&parseTime=True&loc=Local"
 
-#  driver: mysql # sqlite 或 mysql
-#  dsn: "root:123456@tcp(localhost:3306)/claude_router?charset=utf8mb4&parseTime=True&loc=Local"
+  driver: mysql # sqlite 或 mysql
+  dsn: "solosw:123456@tcp(149.88.87.56:3306)/claude_router?charset=utf8mb4&parseTime=True&loc=Local"
 
 
 auth:

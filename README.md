@@ -365,6 +365,45 @@ curl -X POST "http://localhost:8090/back/v1/responses" \
 **解决方案**：
 - 建议优先使用 `openai_compatible`（SDK translator 路径）
 
+### 400 `Invalid Value: 'tools.defer_loading'. Deferred tools require tools.tool_search.`
+
+**原因**：当 OpenAI Responses / Codex 请求中的某些工具设置了 `defer_loading: true` 时，`tools` 数组中必须同时包含 `tool_search` 工具。仅保留 deferred tool 而未提供 `tool_search`，上游会直接返回 400。
+
+**解决方案**：
+- 不要移除 deferred tool
+- 保留工具定义中的 `defer_loading: true`
+- 确保 `tools` 数组中包含 `{"type": "tool_search"}`
+- ClaudeRouter 在 Responses / Codex 请求归一化阶段会自动检测：如果发现 deferred tools 但缺少 `tool_search`，会自动补齐 `tool_search`
+
+**示例**：
+
+```json
+{
+  "model": "your-model-id",
+  "input": "Hello",
+  "tools": [
+    {
+      "type": "function",
+      "name": "search_docs",
+      "description": "Search project docs",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string"
+          }
+        },
+        "required": ["query"]
+      },
+      "defer_loading": true
+    },
+    {
+      "type": "tool_search"
+    }
+  ]
+}
+```
+
 ### 同会话模型未切换
 
 **原因**：命中会话缓存会复用模型

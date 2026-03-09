@@ -97,7 +97,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("failed to init database: %v", err)
 	}
-	if err := db.AutoMigrate(&model.Model{}, &model.Combo{}, &model.ComboItem{}, &model.User{}, &model.UsageLog{}, &model.ErrorLog{}); err != nil {
+	if err := db.AutoMigrate(&model.Model{}, &model.Combo{}, &model.ComboItem{}, &model.User{}, &model.UsageLog{}, &model.ErrorLog{}, &model.RedeemCode{}, &model.RedeemLog{}); err != nil {
 		log.Fatalf("failed to migrate database: %v", err)
 	}
 
@@ -130,7 +130,7 @@ func main() {
 	chatTestHandler.RegisterRoutes(authenticated)
 	oldMessagesHandler := oldhandler.NewMessagesHandler(cfg)
 	oldMessagesHandler.RegisterRoutes(authenticated)
-
+	handler.RegisterRedeemRoutes(authenticated)
 	handler.RegisterModelRoutes(authenticated, cfg)
 	oldhandler.Start()
 	// 不需要认证的路由

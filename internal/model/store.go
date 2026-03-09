@@ -545,3 +545,181 @@ func ListErrorLogs(modelID string, page, pageSize int) ([]ErrorLog, int64, error
 	}
 	return logs, total, nil
 }
+
+// ==================== 兑换码相关操作 ====================
+
+var (
+	ErrRedeemCodeNotFound    = errors.New("redeem code not found")
+	ErrRedeemCodeExpired     = errors.New("redeem code expired")
+	ErrRedeemCodeExhausted   = errors.New("redeem code exhausted")
+	ErrRedeemCodeAlreadyUsed = errors.New("you have already used this redeem code")
+)
+
+// CreateRedeemCode 创建兑换码
+func CreateRedeemCode(code *RedeemCode) error {
+	if code == nil {
+		return errors.New("invalid redeem code")
+	}
+	code.Code = strings.TrimSpace(code.Code)
+	if code.Code == "" {
+		return errors.New("code required")
+	}
+	if code.Quota <= 0 {
+		return errors.New("quota must be > 0")
+	}
+	if code.MaxUses < 1 {
+		code.MaxUses = 1
+	}
+	code.UsedCount = 0
+	code.CreatedAt = time.Now()
+	code.UpdatedAt = time.Now()
+	return storage.DB.Create(code).Error
+}
+
+// GetRedeemCode 根据兑换码获取详情
+func GetRedeemCode(code string) (*RedeemCode, error) {
+	code = strings.TrimSpace(code)
+	if code == "" {
+		return nil, ErrRedeemCodeNotFound
+	}
+	var rc RedeemCode
+	if err := storage.DB.Where("code = ?", code).First(&rc).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, ErrRedeemCodeNotFound
+		}
+		return nil, err
+	}
+	return &rc, nil
+}
+
+// ListRedeemCodesWithPage 分页查询兑换码列表
+func ListRedeemCodesWithPage(code, createdBy string, page, pageSize int) ([]*RedeemCode, int64, error) {
+	var codes []*RedeemCode
+	var total int64
+
+	query := storage.DB.Model(&RedeemCode{})
+
+	if code != "" {
+		query = query.Where("code LIKE ?", "%"+code+"%")
+	}
+	if createdBy != "" {
+		query = query.Where("created_by = ?", createdBy)
+	}
+
+	if err := query.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+
+	offset := (page - 1) * pageSize
+	if err := query.Order("created_at DESC").Limit(pageSize).Offset(offset).Find(&codes).Error; err != nil {
+		return nil, 0, err
+	}
+
+	return codes, total, nil
+}
+
+// DeleteRedeemCode 删除兑换码
+func DeleteRedeemCode(id int64) error {
+	if id <= 0 {
+		return errors.New("invalid id")
+	}
+	res := storage.DB.Where("id = ?", id).Delete(&RedeemCode{})
+	if res.Error != nil {
+		return res.Error
+	}
+	if res.RowsAffected == 0 {
+		return ErrRedeemCodeNotFound
+	}
+	return nil
+}
+
+// RedeemQuota 用户兑换额度（原子操作，防止并发问题）
+func RedeemQuota(code, username string) error {
+	code = strings.TrimSpace(code)
+	username = strings.TrimSpace(username)
+	if code == "" || username == "" {
+		return errors.New("code and username required")
+	}
+
+	// 使用事务确保原子性
+	return storage.DB.Transaction(func(tx *gorm.DB) error {
+		// 1. 查询兑换码（加锁）
+		var rc RedeemCode
+		if err := tx.Where("code = ?", code).First(&rc).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return ErrRedeemCodeNotFound
+			}
+			return err
+		}
+
+		// 2. 检查是否过期
+		if rc.ExpireAt != nil && time.Now().After(*rc.ExpireAt) {
+			return ErrRedeemCodeExpired
+		}
+
+		// 3. 检查是否已用完
+		if rc.UsedCount >= rc.MaxUses {
+			return ErrRedeemCodeExhausted
+		}
+
+		// 4. 检查用户是否已使用过该兑换码
+		var count int64
+		if err := tx.Model(&RedeemLog{}).Where("code = ? AND username = ?", code, username).Count(&count).Error; err != nil {
+			return err
+		}
+		if count > 0 {
+			return ErrRedeemCodeAlreadyUsed
+		}
+
+		// 5. 增加用户额度
+		if err := tx.Model(&User{}).Where("username = ?", username).Update("quota", gorm.Expr("quota + ?", rc.Quota)).Error; err != nil {
+			return err
+		}
+
+		// 6. 更新兑换码使用次数
+		if err := tx.Model(&RedeemCode{}).Where("id = ?", rc.ID).Updates(map[string]any{
+			"used_count": gorm.Expr("used_count + 1"),
+			"updated_at": time.Now(),
+		}).Error; err != nil {
+			return err
+		}
+
+		// 7. 记录兑换日志
+		log := &RedeemLog{
+			Code:      code,
+			Username:  username,
+			Quota:     rc.Quota,
+			CreatedAt: time.Now(),
+		}
+		if err := tx.Create(log).Error; err != nil {
+			return err
+		}
+
+		return nil
+	})
+}
+
+// ListRedeemLogsByUsername 查询用户的兑换记录
+func ListRedeemLogsByUsername(username string, page, pageSize int) ([]RedeemLog, int64, error) {
+	if strings.TrimSpace(username) == "" || page < 1 || pageSize < 1 {
+		return nil, 0, nil
+	}
+
+	var logs []RedeemLog
+	var total int64
+
+	if err := storage.DB.Where("username = ?", username).Model(&RedeemLog{}).Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+
+	offset := (page - 1) * pageSize
+	if err := storage.DB.Where("username = ?", username).
+		Order("created_at DESC").
+		Limit(pageSize).
+		Offset(offset).
+		Find(&logs).Error; err != nil {
+		return nil, 0, err
+	}
+
+	return logs, total, nil
+}

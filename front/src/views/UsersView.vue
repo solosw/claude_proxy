@@ -223,8 +223,8 @@ onMounted(() => {
 
 <template>
   <div class="p-6">
-    <div class="flex items-center justify-between mb-4">
-      <h2 class="text-xl font-semibold">用户管理</h2>
+    <div class="header-bar mb-6">
+      <h2 class="page-title"><el-icon class="mr-2"><User /></el-icon>用户管理</h2>
       <el-button type="primary" @click="openCreate">新增用户</el-button>
     </div>
 
@@ -419,9 +419,10 @@ onMounted(() => {
 }
 
 .filter-panel {
-  background: #f5f7fa;
-  padding: 12px;
-  border-radius: 4px;
+  padding: 16px;
+  background: rgba(0, 0, 0, 0.2);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  border-radius: 12px;
 }
 
 .filter-form {
@@ -475,18 +476,31 @@ onMounted(() => {
 .usage-row {
   display: flex;
   justify-content: space-between;
-  background: rgba(102, 126, 234, 0.06);
+  background: rgba(0, 0, 0, 0.2);
   padding: 10px 12px;
   border-radius: 8px;
+}
+
+.header-bar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.page-title {
+  display: flex;
+  align-items: center;
+  font-size: 24px;
+  font-weight: 700;
+  margin: 0;
+  color: #f8fafc;
+}
+.page-title .el-icon {
+  color: #8b5cf6;
 }
 
 @keyframes fadeInUp {
   from { opacity: 0; transform: translateY(20px); }
   to { opacity: 1; transform: translateY(0); }
-}
-
-.el-table :deep(.el-table__header th .cell) {
-  color: #303133;
 }
 
 .pagination-container {

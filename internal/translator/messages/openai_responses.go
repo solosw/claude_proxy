@@ -226,6 +226,12 @@ func (a *OpenAIResponsesAdapter) Execute(ctx context.Context, payload map[string
 		return a.handleSDKError(err)
 	}
 
+	// 空指针防护：确保响应对象不为 nil
+	if resp == nil {
+		logStep("openai_responses adapter: received nil response from SDK")
+		return 502, "application/json", []byte(`{"error":"upstream returned nil response"}`), nil, nil
+	}
+
 	// 检查响应中的工具调用
 	if resp.Output != nil && len(resp.Output) > 0 {
 		logStep("openai_responses adapter: response output_count=%d", len(resp.Output))
@@ -246,15 +252,23 @@ func (a *OpenAIResponsesAdapter) Execute(ctx context.Context, payload map[string
 		logStep("openai_responses adapter: response output is empty")
 	}
 
-	// 构建响应 JSON
+	// 构建响应 JSON（安全地处理可能为 nil 的字段）
 	respJSON := map[string]any{
 		"id":     resp.ID,
 		"object": "response",
 		"model":  resp.Model,
 		"status": string(resp.Status),
-		"output": resp.Output,
-		"usage":  resp.Usage,
 	}
+
+	// 安全地添加 output 字段
+	if resp.Output != nil {
+		respJSON["output"] = resp.Output
+	} else {
+		respJSON["output"] = []any{}
+	}
+
+	// 直接添加 usage 字段（结构体类型，不需要 nil 检查）
+	respJSON["usage"] = resp.Usage
 
 	body, err = json.Marshal(respJSON)
 	if err != nil {
@@ -285,6 +299,33 @@ func (a *OpenAIResponsesAdapter) Execute(ctx context.Context, payload map[string
 func (a *OpenAIResponsesAdapter) executeStream(ctx context.Context, client *openai.Client, params responses.ResponseNewParams) (statusCode int, contentType string, body []byte, streamBody io.ReadCloser, err error) {
 	stream := client.Responses.NewStreaming(ctx, params)
 
+	writeSSEEvent := func(writer *bufio.Writer, eventName string, eventData map[string]any) bool {
+		writer.WriteString("event: " + eventName + "\n")
+		if dataBytes, marshalErr := json.Marshal(eventData); marshalErr == nil {
+			writer.WriteString("data: " + string(dataBytes) + "\n")
+		} else {
+			logStep("openai_responses adapter: marshal stream event err=%v, event=%s", marshalErr, eventName)
+			fallbackBytes, _ := json.Marshal(map[string]any{
+				"type":    "error",
+				"message": "failed to encode stream event",
+			})
+			writer.WriteString("data: " + string(fallbackBytes) + "\n")
+		}
+		writer.WriteString("\n")
+		if flushErr := writer.Flush(); flushErr != nil {
+			logStep("openai_responses adapter: flush stream event err=%v, event=%s", flushErr, eventName)
+			return false
+		}
+		return true
+	}
+
+	writeStreamError := func(writer *bufio.Writer, message string) bool {
+		return writeSSEEvent(writer, "error", map[string]any{
+			"type":    "error",
+			"message": message,
+		})
+	}
+
 	// 创建一个管道,将 SDK 的流式事件转换为 SSE 格式
 	pr, pw := io.Pipe()
 
@@ -298,6 +339,16 @@ func (a *OpenAIResponsesAdapter) executeStream(ctx context.Context, client *open
 			// 调试输出：记录每个事件
 			logStep("openai_responses adapter: stream event type=%s, delta=%s", event.Type, event.Delta)
 
+			if strings.EqualFold(event.Type, "error") {
+				message := strings.TrimSpace(event.Delta)
+				if message == "" {
+					message = "upstream returned stream error event"
+				}
+				logStep("openai_responses adapter: upstream emitted error event=%s", message)
+				writeStreamError(writer, message)
+				return
+			}
+
 			// 将 SDK 事件转换为标准 SSE 格式
 			eventData := map[string]any{
 				"type": event.Type,
@@ -306,6 +357,11 @@ func (a *OpenAIResponsesAdapter) executeStream(ctx context.Context, client *open
 			// 根据事件类型添加相应字段
 			switch event.Type {
 			case "response.created":
+				if event.Response.Error.Code != "" {
+					logStep("openai_responses adapter: missing response payload for event=%s", event.Type)
+					writeStreamError(writer, "upstream returned response.created without response payload")
+					return
+				}
 				eventData["id"] = event.Response.ID
 				eventData["model"] = event.Response.Model
 				eventData["status"] = event.Response.Status
@@ -329,33 +385,24 @@ func (a *OpenAIResponsesAdapter) executeStream(ctx context.Context, client *open
 				eventData["output_index"] = event.OutputIndex
 				eventData["item"] = event.Item
 			case "response.done":
+				if event.Response.Error.Code != "" {
+					logStep("openai_responses adapter: missing response payload for event=%s", event.Type)
+					writeStreamError(writer, "upstream returned response.done without response payload")
+					return
+				}
 				eventData["id"] = event.Response.ID
 				eventData["status"] = event.Response.Status
 				eventData["usage"] = event.Response.Usage
 			}
 
-			// 写入 SSE 格式
-			writer.WriteString("event: " + event.Type + "\n")
-			if dataBytes, err := json.Marshal(eventData); err == nil {
-				writer.WriteString("data: " + string(dataBytes) + "\n")
+			if ok := writeSSEEvent(writer, event.Type, eventData); !ok {
+				return
 			}
-			writer.WriteString("\n")
-			writer.Flush()
 		}
 
 		if err := stream.Err(); err != nil {
 			logStep("openai_responses adapter: stream error=%v", err)
-			// 写入错误事件
-			errData := map[string]any{
-				"type":    "error",
-				"message": err.Error(),
-			}
-			writer.WriteString("event: error\n")
-			if dataBytes, err := json.Marshal(errData); err == nil {
-				writer.WriteString("data: " + string(dataBytes) + "\n")
-			}
-			writer.WriteString("\n")
-			writer.Flush()
+			writeStreamError(writer, err.Error())
 		}
 	}()
 
@@ -365,14 +412,33 @@ func (a *OpenAIResponsesAdapter) executeStream(ctx context.Context, client *open
 
 // handleSDKError 处理 SDK 错误并返回适当的 HTTP 响应
 func (a *OpenAIResponsesAdapter) handleSDKError(err error) (statusCode int, contentType string, body []byte, streamBody io.ReadCloser, retErr error) {
+	// 空指针防护：确保 err 不为 nil
+	if err == nil {
+		logStep("openai_responses adapter: handleSDKError called with nil error")
+		return 500, "application/json", []byte(`{"error":"internal error: nil error passed to handler"}`), nil, nil
+	}
+
 	var apiErr *openai.Error
-	if errors, ok := err.(*openai.Error); ok {
+	if errors, ok := err.(*openai.Error); ok && errors != nil {
 		apiErr = errors
-		statusCode = apiErr.StatusCode
+
+		// 安全地获取状态码，防止空指针
+		statusCode = 502 // 默认值
+		if apiErr.StatusCode > 0 {
+			statusCode = apiErr.StatusCode
+		}
 		if statusCode < 400 {
 			statusCode = 502
 		}
-		body = apiErr.DumpResponse(false)
+
+		// 安全地获取响应体
+		body = []byte(`{"error":"upstream service error"}`) // 默认错误消息
+		if apiErr.DumpResponse != nil {
+			if dumpBody := apiErr.DumpResponse(false); len(dumpBody) > 0 {
+				body = dumpBody
+			}
+		}
+
 		logStep("openai_responses adapter: API error status=%d, body=%s", statusCode, string(body))
 		return statusCode, "application/json", body, nil, nil
 	}

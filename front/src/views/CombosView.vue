@@ -155,8 +155,8 @@ onMounted(loadData);
 
 <template>
   <div class="p-6">
-    <div class="header-bar">
-      <h2 class="page-title">组合模型管理</h2>
+    <div class="header-bar mb-6">
+      <h2 class="page-title"><el-icon class="mr-2"><Grid /></el-icon>组合模型管理</h2>
       <el-button type="primary" @click="openCreate">
         新建组合模型
       </el-button>
@@ -324,23 +324,18 @@ onMounted(loadData);
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 24px;
-  padding: 20px;
-  background: rgba(255, 255, 255, 0.6);
-  backdrop-filter: blur(10px);
-  border-radius: 12px;
-  border: 1px solid rgba(255, 255, 255, 0.2);
-  box-shadow: 0 4px 15px rgba(102, 126, 234, 0.1);
 }
 
 .page-title {
+  display: flex;
+  align-items: center;
   font-size: 24px;
   font-weight: 700;
   margin: 0;
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-  background-clip: text;
+  color: #f8fafc;
+}
+.page-title .el-icon {
+  color: #fcd34d;
 }
 
 .dialog-footer {
@@ -360,7 +355,5 @@ onMounted(loadData);
   }
 }
 
-.el-table :deep(.el-table__header th .cell) {
-  color: #303133;
-}
+
 </style>

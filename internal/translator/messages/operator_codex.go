@@ -126,6 +126,8 @@ func (s *CodexStrategy) Execute(ctx context.Context, payload map[string]any, opt
 		}
 	}
 
+	responsePayload := unwrapOpenAIResponsesEventPayload(translateBody)
+
 	var param any
 	out := sdktranslator.TranslateNonStreamByFormatName(
 		ctx,
@@ -134,11 +136,30 @@ func (s *CodexStrategy) Execute(ctx context.Context, payload map[string]any, opt
 		opts.UpstreamModel,
 		originalReq,
 		translatedReq,
-		translateBody,
+		responsePayload,
 		&param,
 	)
-	if strings.TrimSpace(out) == "" {
+	out = strings.TrimSpace(out)
+	if (out == "" || !json.Valid([]byte(out))) && !bytes.Equal(bytes.TrimSpace(responsePayload), bytes.TrimSpace(translateBody)) {
+		out = sdktranslator.TranslateNonStreamByFormatName(
+			ctx,
+			sdktranslator.FormatCodex,
+			sdktranslator.FormatClaude,
+			opts.UpstreamModel,
+			originalReq,
+			translatedReq,
+			translateBody,
+			&param,
+		)
+		out = strings.TrimSpace(out)
+	}
+	if out == "" {
+		logStep("operator codex: non-stream translation empty, upstream payload=%s", string(translateBody))
 		return 0, "", nil, nil, fmt.Errorf("operator codex: non-stream translation returned empty output")
+	}
+	if !json.Valid([]byte(out)) {
+		logStep("operator codex: non-stream translation invalid json, translated output=%s", out)
+		return 0, "", nil, nil, fmt.Errorf("operator codex: non-stream translation returned invalid json")
 	}
 
 	return statusCode, "application/json", []byte(out), nil, nil
@@ -166,6 +187,13 @@ func normalizeCodexRequestPayload(raw []byte, upstreamModel string, stream bool)
 	delete(payload, "previous_response_id")
 	delete(payload, "prompt_cache_retention")
 	delete(payload, "safety_identifier")
+	payload["tools"] = ensureToolSearchForDeferredTools(payload["tools"])
+	if tools, ok := payload["tools"].([]any); ok && len(tools) == 0 {
+		delete(payload, "tools")
+		delete(payload, "tool_choice")
+		delete(payload, "parallel_tool_calls")
+		delete(payload, "tool_constraint")
+	}
 
 	return json.Marshal(payload)
 }

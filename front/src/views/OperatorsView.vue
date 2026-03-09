@@ -23,11 +23,13 @@ onMounted(loadOperators);
 
 <template>
   <div class="p-6">
-    <div class="header-section">
-      <h2 class="page-title">运营商</h2>
-      <p class="page-description">
-        运营商为系统内置，不可添加或修改。选择运营商的模型会使用系统配置的转发逻辑，与直连 OpenAI / Anthropic 区分开。
-      </p>
+    <div class="header-bar mb-6">
+      <div>
+        <h2 class="page-title"><el-icon class="mr-2"><Connection /></el-icon>运营商</h2>
+        <p class="page-description">
+          运营商为系统内置，不可添加或修改。选择运营商的模型会使用系统配置的转发逻辑，与直连 OpenAI / Anthropic 区分开。
+        </p>
+      </div>
     </div>
 
     <el-table
@@ -55,30 +57,29 @@ onMounted(loadOperators);
   animation: fadeInUp 0.6s ease-out;
 }
 
-.header-section {
-  margin-bottom: 24px;
-  padding: 20px;
-  background: rgba(255, 255, 255, 0.6);
-  backdrop-filter: blur(10px);
-  border-radius: 12px;
-  border: 1px solid rgba(255, 255, 255, 0.2);
-  box-shadow: 0 4px 15px rgba(102, 126, 234, 0.1);
+.header-bar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
 }
 
 .page-title {
+  display: flex;
+  align-items: center;
   font-size: 24px;
   font-weight: 700;
   margin: 0 0 12px;
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-  background-clip: text;
+  color: #f8fafc;
+}
+
+.page-title .el-icon {
+  color: #34d399;
 }
 
 .page-description {
   margin: 0;
   font-size: 14px;
-  color: #6b7280;
+  color: #94a3b8;
   line-height: 1.6;
 }
 
@@ -91,9 +92,5 @@ onMounted(loadOperators);
     opacity: 1;
     transform: translateY(0);
   }
-}
-
-.el-table :deep(.el-table__header th .cell) {
-  color: #303133;
 }
 </style>

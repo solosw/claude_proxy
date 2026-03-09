@@ -53,27 +53,34 @@ func APIKeyAuth(apiKey string) gin.HandlerFunc {
 		user, err := model.GetUserByAPIKey(provided)
 		if err != nil {
 			unauthorized(c)
-
 			return
 		}
 
-		now := time.Now()
-		if user.ExpireAt != nil && now.After(*user.ExpireAt) {
-			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{
-				"code":    http.StatusForbidden,
-				"success": false,
-				"message": "api key expired",
-			})
-			return
-		}
+		// 检查请求路径，如果是 /v1 或 /back/v1 开头的请求（模型调用），则检查额度和过期时间
+		// 其他请求（如 /api/me/usage、/api/redeem 等）允许通过，让用户能进入页面兑换码
+		requestPath := c.Request.URL.Path
+		isModelAPIRequest := strings.HasPrefix(requestPath, "/v1/") || strings.HasPrefix(requestPath, "/back/v1/")
 
-		if user.Quota <= 0.1 && user.Quota >= 0 {
-			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{
-				"code":    http.StatusForbidden,
-				"success": false,
-				"message": "quota exceeded",
-			})
-			return
+		if isModelAPIRequest {
+			// 模型 API 请求需要检查额度和过期时间
+			now := time.Now()
+			if user.ExpireAt != nil && now.After(*user.ExpireAt) {
+				c.AbortWithStatusJSON(http.StatusForbidden, gin.H{
+					"code":    http.StatusForbidden,
+					"success": false,
+					"message": "api key expired",
+				})
+				return
+			}
+
+			if user.Quota <= 0.01 && user.Quota >= 0 {
+				c.AbortWithStatusJSON(http.StatusForbidden, gin.H{
+					"code":    http.StatusForbidden,
+					"success": false,
+					"message": "quota exceeded",
+				})
+				return
+			}
 		}
 
 		c.Set(currentUserKey, user)

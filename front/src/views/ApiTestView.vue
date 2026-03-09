@@ -184,57 +184,6 @@ onBeforeUnmount(() => {
   box-sizing: border-box;
 }
 
-html,
-body {
-  height: 100%;
-  overflow-x: hidden;
-}
-
-body {
-  margin: 0;
-  font-family: system-ui, sans-serif;
-  background: linear-gradient(135deg, #e6f2ff 0%, #ffffff 100%);
-  color: #1f2937;
-}
-
-/* 自定义滚动条（全局） */
-:root {
-  --sb-track: #eef6ff;
-  --sb-thumb: #cfe6ff;
-  --sb-thumb-hover: #9cc8ff;
-}
-
-/* Firefox 浏览器 */
-* {
-  scrollbar-color: var(--sb-thumb) var(--sb-track);
-  scrollbar-width: thin;
-}
-
-/* WebKit 内核 (Chrome/Edge/Safari) */
-*::-webkit-scrollbar {
-  width: 10px;
-  height: 10px;
-}
-
-*::-webkit-scrollbar-track {
-  background: var(--sb-track);
-  border-radius: 8px;
-}
-
-*::-webkit-scrollbar-thumb {
-  background-color: var(--sb-thumb);
-  border-radius: 8px;
-  border: 2px solid var(--sb-track);
-}
-
-*::-webkit-scrollbar-thumb:hover {
-  background-color: var(--sb-thumb-hover);
-}
-
-*::-webkit-scrollbar-corner {
-  background: transparent;
-}
-
 .container {
   max-width: 1200px;
   margin: 0 auto;
@@ -249,7 +198,7 @@ body {
 
 .header {
   text-align: center;
-  color: #0f172a;
+  color: #f1f5f9;
   margin-bottom: 32px;
 }
 
@@ -259,11 +208,11 @@ body {
 }
 
 .header p {
-  color: #475569;
+  color: #cbd5e1;
 }
 
 .header .subnote {
-  color: #6b7280;
+  color: #94a3b8;
   font-size: 12px;
   margin-top: 4px;
 }
@@ -291,11 +240,14 @@ body {
 }
 
 .main-card {
-  background: #fff;
+  background: rgba(15, 23, 42, 0.6);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: 16px;
   padding: 28px 24px 24px;
-  box-shadow: 0 12px 24px rgba(30, 144, 255, 0.12);
-  border: 1px solid #e5f1ff;
+  box-shadow: 0 10px 30px -10px rgba(0, 0, 0, 0.5);
+  color: #f1f5f9;
 }
 
 @media (max-width: 600px) {
@@ -315,19 +267,19 @@ body {
 .config-header h2 {
   margin: 0;
   font-size: 18px;
-  color: #0f172a;
+  color: #f1f5f9;
 }
 
 /* 统一二级与三级标题字号与样式 */
 .test-section h2 {
   margin: 12px 0 18px;
   font-size: 18px;
-  color: #0f172a;
+  color: #f1f5f9;
 }
 
 .column h3 {
   margin: 16px 0 16px;
-  color: #0f172a;
+  color: #f1f5f9;
   font-size: 18px;
 }
 
@@ -365,22 +317,25 @@ body {
 
 .input-group label {
   font-weight: 600;
-  color: #334155;
+  color: #cbd5e1;
 }
 
 .input-group input,
 .input-group select {
   padding: 12px 14px;
-  border: 1.5px solid #cfe6ff;
+  background: rgba(0,0,0,0.3);
+  color: #f8fafc;
+  border: 1px solid rgba(255,255,255,0.1);
   border-radius: 10px;
   font-size: 15px;
   outline: none;
-  transition: border-color .2s ease;
+  transition: all .2s ease;
 }
 
 .input-group input:focus,
 .input-group select:focus {
-  border-color: #1e90ff;
+  border-color: #a5b4fc;
+  box-shadow: 0 0 0 1px #a5b4fc inset;
 }
 
 /* 密码输入框包装器 */
@@ -438,16 +393,17 @@ body {
 
 .btn {
   padding: 10px 16px;
-  border: none;
+  border: 1px solid rgba(255,255,255,0.1);
   border-radius: 8px;
   cursor: pointer;
-  background: #f1f5f9;
-  color: #0f172a;
+  background: rgba(255,255,255,0.05);
+  color: #f1f5f9;
   font-weight: 600;
+  transition: all 0.2s ease;
 }
 
 .btn:hover {
-  background: #e2e8f0;
+  background: rgba(255,255,255,0.1);
 }
 
 .btn:disabled {
@@ -457,26 +413,27 @@ body {
 }
 
 .btn-primary {
-  background: #1e90ff;
+  background: linear-gradient(135deg, #6366f1, #8b5cf6);
+  border: none;
   color: #fff;
 }
 
 .btn-primary:hover {
-  background: #1778d6;
+  background: linear-gradient(135deg, #4f46e5, #7c3aed);
 }
 
 .btn-secondary {
-  background: #e7f2ff;
-  color: #0f172a;
-  border: 1px solid #cfe6ff;
+  background: rgba(255,255,255,0.05);
+  color: #f1f5f9;
+  border: 1px solid rgba(255,255,255,0.1);
 }
 
 .btn-secondary:hover {
-  background: #d9ecff;
+  background: rgba(255,255,255,0.15);
 }
 
 .muted {
-  color: #64748b;
+  color: #94a3b8;
   margin: 6px 0 18px;
 }
 
@@ -484,7 +441,7 @@ body {
 #vendorType {
   display: flex;
   gap: 24px;
-  border-bottom: 2px solid #eef6ff;
+  border-bottom: 2px solid rgba(255,255,255,0.1);
   margin-bottom: 20px;
   padding: 0 4px;
   overflow-x: auto;
@@ -506,7 +463,7 @@ body {
   border: none;
   border-radius: 0;
   padding: 10px 4px;
-  color: #64748b;
+  color: #94a3b8;
   font-weight: 600;
   position: relative;
   transition: all 0.2s ease;
@@ -519,19 +476,19 @@ body {
   left: 0;
   width: 100%;
   height: 2px;
-  background: #1e90ff;
+  background: #a5b4fc;
   transform: scaleX(0);
   transition: transform 0.2s ease;
 }
 
 #vendorType .seg-btn:hover {
   background: transparent;
-  color: #1e90ff;
+  color: #a5b4fc;
 }
 
 #vendorType .seg-btn.active {
   background: transparent;
-  color: #1e90ff;
+  color: #a5b4fc;
   border: none;
 }
 
@@ -548,9 +505,9 @@ body {
 }
 
 #testType .seg-btn {
-  border: 1px solid #e2e8f0;
-  background: #ffffff;
-  color: #475569;
+  border: 1px solid rgba(255,255,255,0.1);
+  background: rgba(0,0,0,0.2);
+  color: #cbd5e1;
   padding: 6px 16px;
   border-radius: 10px;
   font-size: 13px;
@@ -559,17 +516,16 @@ body {
 }
 
 #testType .seg-btn:hover {
-  border-color: #cbd5e1;
-  background: #f8fafc;
-  color: #334155;
+  border-color: rgba(255,255,255,0.3);
+  background: rgba(0,0,0,0.4);
+  color: #f8fafc;
 }
 
 #testType .seg-btn.active {
-  background: #eff6ff;
-  border-color: #bfdbfe;
-  color: #1e90ff;
+  background: rgba(99, 102, 241, 0.2);
+  border-color: #8b5cf6;
+  color: #a5b4fc;
   font-weight: 600;
-  box-shadow: 0 1px 2px rgba(30, 144, 255, 0.05);
 }
 
 /* 其他用途的通用分段控件 */
@@ -581,9 +537,9 @@ body {
 }
 
 .segmented:not(#vendorType):not(#testType) .seg-btn {
-  border: 1px solid #cfe6ff;
-  background: #ffffff;
-  color: #0f172a;
+  border: 1px solid rgba(255,255,255,0.1);
+  background: rgba(0,0,0,0.2);
+  color: #cbd5e1;
   padding: 8px 12px;
   border-radius: 10px;
   cursor: pointer;
@@ -591,30 +547,34 @@ body {
 }
 
 .segmented:not(#vendorType):not(#testType) .seg-btn:hover {
-  background: #f4f9ff;
+  background: rgba(0,0,0,0.4);
 }
 
 .segmented:not(#vendorType):not(#testType) .seg-btn.active {
-  background: #1e90ff;
+  background: rgba(99, 102, 241, 0.4);
   color: #ffffff;
-  border-color: #1e90ff;
+  border-color: #8b5cf6;
 }
 
 /* 用户输入文本框 */
 .input-textarea {
   width: 100%;
   padding: 12px 14px;
-  border: 1.5px solid #cfe6ff;
+  border: 1px solid rgba(255,255,255,0.1);
+  background: rgba(0,0,0,0.3);
+  color: #f8fafc;
   border-radius: 10px;
   font-size: 15px;
   line-height: 1.6;
   resize: vertical;
   min-height: 80px;
+  transition: all 0.2s;
 }
 
 .input-textarea:focus {
   outline: none;
-  border-color: #1e90ff;
+  border-color: #a5b4fc;
+  box-shadow: 0 0 0 1px #a5b4fc inset;
 }
 
 .split-columns {
@@ -651,8 +611,8 @@ body {
 
 .card,
 .code-block {
-  background: #ffffff;
-  border: 1px solid #e5f1ff;
+  background: rgba(15, 23, 42, 0.6);
+  border: 1px solid rgba(255,255,255,0.08);
   border-radius: 12px;
   padding: 14px;
   position: relative;
@@ -663,7 +623,7 @@ body {
 .code-block .title {
   font-size: 13px;
   font-weight: 700;
-  color: #0f172a;
+  color: #cbd5e1;
   margin-bottom: 10px;
   letter-spacing: .2px;
 }
@@ -677,9 +637,9 @@ body {
   font-family: ui-monospace, monospace;
   font-size: 13px;
   line-height: 1.6;
-  color: #0b2542;
-  background: #f8fbff;
-  border: 1px solid #e5f1ff;
+  color: #a5b4fc;
+  background: rgba(0,0,0,0.3);
+  border: 1px solid rgba(255,255,255,0.05);
   border-radius: 8px;
   padding: 10px;
 }
@@ -691,13 +651,15 @@ body {
   font-size: 12px;
   padding: 4px 8px;
   border-radius: 6px;
-  background: #ffffff;
-  border: 1px solid #cfe6ff;
+  background: rgba(255,255,255,0.05);
+  color: #cbd5e1;
+  border: 1px solid rgba(255,255,255,0.1);
   cursor: pointer;
 }
 
 .copy-btn:hover {
-  background: #f0f7ff;
+  background: rgba(255,255,255,0.1);
+  color: #fff;
 }
 
 .error-message {

@@ -74,9 +74,9 @@ onMounted(() => {
 
 <template>
   <div class="p-6">
-    <div class="flex items-center justify-between mb-4">
-      <h2 class="text-xl font-semibold">错误日志</h2>
-      <el-button @click="loadLogs">刷新</el-button>
+    <div class="header-bar mb-6">
+      <h2 class="page-title"><el-icon class="mr-2"><Warning /></el-icon>错误日志</h2>
+      <el-button color="#ef4444" plain @click="loadLogs">刷新</el-button>
     </div>
 
     <!-- 筛选 -->
@@ -148,15 +148,35 @@ onMounted(() => {
 }
 
 .filter-panel {
-  background: #f5f7fa;
-  padding: 12px;
-  border-radius: 4px;
+  padding: 16px;
+  background: rgba(0, 0, 0, 0.2);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  border-radius: 12px;
 }
 
 .filter-form {
   display: flex;
   gap: 12px;
   align-items: center;
+}
+
+.header-bar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.page-title {
+  display: flex;
+  align-items: center;
+  font-size: 24px;
+  font-weight: 700;
+  margin: 0;
+  color: #f8fafc;
+}
+
+.page-title .el-icon {
+  color: #f87171;
 }
 
 .error-msg {
@@ -177,7 +197,5 @@ onMounted(() => {
   to { opacity: 1; transform: translateY(0); }
 }
 
-.el-table :deep(.el-table__header th .cell) {
-  color: #303133;
-}
+
 </style>
