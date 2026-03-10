@@ -308,7 +308,10 @@ func normalizeOpenAIResponsesRequestPayload(raw []byte, opts OpenAIChatTranslate
 	delete(payload, "previous_response_id")
 	delete(payload, "prompt_cache_retention")
 	delete(payload, "safety_identifier")
-	payload["tools"] = ensureToolSearchForDeferredTools(payload["tools"])
+	if opts.UpstreamModel == "gpt-5.4" {
+		payload["tools"] = ensureToolSearchForDeferredTools(payload["tools"])
+	}
+	
 	if tools, ok := payload["tools"].([]any); ok && len(tools) == 0 {
 		delete(payload, "tools")
 		delete(payload, "tool_choice")

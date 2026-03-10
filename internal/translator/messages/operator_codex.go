@@ -187,7 +187,10 @@ func normalizeCodexRequestPayload(raw []byte, upstreamModel string, stream bool)
 	delete(payload, "previous_response_id")
 	delete(payload, "prompt_cache_retention")
 	delete(payload, "safety_identifier")
-	payload["tools"] = ensureToolSearchForDeferredTools(payload["tools"])
+	if upstreamModel == "gpt-5.4" {
+		payload["tools"] = ensureToolSearchForDeferredTools(payload["tools"])
+	}
+
 	if tools, ok := payload["tools"].([]any); ok && len(tools) == 0 {
 		delete(payload, "tools")
 		delete(payload, "tool_choice")
