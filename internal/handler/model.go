@@ -236,6 +236,9 @@ type userCreateRequest struct {
 	ExpireAt      *time.Time `json:"expire_at"`
 	IsAdmin       bool       `json:"is_admin"`
 	AllowedCombos *string    `json:"allowed_combos"`
+	// 计费模式：token=按token计费，request=按次数计费
+	BillingMode  string  `json:"billing_mode"`
+	RequestPrice float64 `json:"request_price"`
 }
 
 func createUser(c *gin.Context) {
@@ -251,6 +254,12 @@ func createUser(c *gin.Context) {
 		return
 	}
 
+	// 处理计费模式，默认 token
+	billingMode := req.BillingMode
+	if billingMode != "token" && billingMode != "request" {
+		billingMode = "token"
+	}
+
 	for i := 0; i < 10; i++ {
 		apiKey, err := generateUniqueAPIKey()
 		if err != nil {
@@ -264,6 +273,8 @@ func createUser(c *gin.Context) {
 			ExpireAt:      req.ExpireAt,
 			IsAdmin:       req.IsAdmin,
 			AllowedCombos: *(req.AllowedCombos),
+			BillingMode:   billingMode,
+			RequestPrice:  req.RequestPrice,
 		}
 		if err := model.CreateUser(u); err != nil {
 			if strings.Contains(strings.ToLower(err.Error()), "unique") {
@@ -285,6 +296,9 @@ type userUpdateRequest struct {
 	ExpireAt      *time.Time `json:"expire_at"`
 	IsAdmin       *bool      `json:"is_admin"`
 	AllowedCombos *string    `json:"allowed_combos"`
+	// 计费模式：token=按token计费，request=按次数计费
+	BillingMode  *string  `json:"billing_mode"`
+	RequestPrice *float64 `json:"request_price"`
 }
 
 func updateUser(c *gin.Context) {
@@ -311,6 +325,17 @@ func updateUser(c *gin.Context) {
 	}
 	if req.AllowedCombos != nil {
 		update["allowed_combos"] = strings.TrimSpace(*req.AllowedCombos)
+	}
+	// 处理计费模式
+	if req.BillingMode != nil {
+		billingMode := *req.BillingMode
+		if billingMode != "token" && billingMode != "request" {
+			billingMode = "token"
+		}
+		update["billing_mode"] = billingMode
+	}
+	if req.RequestPrice != nil {
+		update["request_price"] = *req.RequestPrice
 	}
 	utils.Logger.Printf("[ClaudeRouter] updateUser: update map=%+v", update)
 	if len(update) == 0 {
@@ -404,8 +429,13 @@ type usageResponse struct {
 	InputTokens   int64      `json:"input_tokens"`
 	OutputTokens  int64      `json:"output_tokens"`
 	TotalTokens   int64      `json:"total_tokens"`
-	IsAdmin       bool       `json:"is_admin"`
-	AllowedCombos string     `json:"allowed_combos"`
+	// 计费相关字段
+	BillingMode   string  `json:"billing_mode"`
+	RequestPrice float64 `json:"request_price"`
+	TotalRequests int64   `json:"total_requests"`
+	// 原有字段
+	IsAdmin       bool   `json:"is_admin"`
+	AllowedCombos string `json:"allowed_combos"`
 }
 
 func usageRespFromUser(u *model.User) *usageResponse {
@@ -420,6 +450,9 @@ func usageRespFromUser(u *model.User) *usageResponse {
 		InputTokens:   u.InputTokens,
 		OutputTokens:  u.OutputTokens,
 		TotalTokens:   u.TotalTokens,
+		BillingMode:   u.BillingMode,
+		RequestPrice:  u.RequestPrice,
+		TotalRequests: u.TotalRequests,
 		IsAdmin:       u.IsAdmin,
 		AllowedCombos: u.AllowedCombos,
 	}

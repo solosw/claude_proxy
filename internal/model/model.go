@@ -42,6 +42,12 @@ type User struct {
 	InputTokens  int64      `json:"input_tokens" gorm:"not null;default:0"`
 	OutputTokens int64      `json:"output_tokens" gorm:"not null;default:0"`
 	TotalTokens  int64      `json:"total_tokens" gorm:"not null;default:0"`
+	// 计费模式：token=按token计费，request=按次数计费
+	BillingMode string `json:"billing_mode" gorm:"size:20;not null;default:'token'"`
+	// 按次计费单价（元/次）
+	RequestPrice float64 `json:"request_price" gorm:"not null;default:0"`
+	// 累计请求次数
+	TotalRequests int64 `json:"total_requests" gorm:"not null;default:0"`
 	// AllowedCombos 逗号分隔的允许使用的 combo ID 列表，空表示不限制
 	AllowedCombos string    `json:"allowed_combos" gorm:"size:2048;not null;default:''"`
 	CreatedAt     time.Time `json:"created_at"`
@@ -50,16 +56,21 @@ type User struct {
 
 // UsageLog 记录每次请求的 token 使用详情。
 type UsageLog struct {
-	ID           int64     `json:"id" gorm:"primaryKey;autoIncrement"`
-	Provider     string    `json:"provider" gorm:"primaryKey;size:100"`
-	Username     string    `json:"username" gorm:"index;size:100;not null"`
-	ModelID      string    `json:"model_id" gorm:"index;size:100;not null"`
-	InputTokens  int64     `json:"input_tokens" gorm:"not null;default:0"`
-	OutputTokens int64     `json:"output_tokens" gorm:"not null;default:0"`
-	InputPrice   float64   `json:"-" gorm:"not null;default:0"`  // 输入单价（元/千 token），不返回给前端
-	OutputPrice  float64   `json:"-" gorm:"not null;default:0"` // 输出单价（元/千 token），不返回给前端
-	TotalCost    float64   `json:"total_cost" gorm:"not null;default:0"`   // 总费用（元）
-	CreatedAt    time.Time `json:"created_at" gorm:"index"`
+	ID            int64     `json:"id" gorm:"primaryKey;autoIncrement"`
+	Provider      string    `json:"provider" gorm:"primaryKey;size:100"`
+	Username      string    `json:"username" gorm:"index;size:100;not null"`
+	ModelID       string    `json:"model_id" gorm:"index;size:100;not null"`
+	InputTokens   int64     `json:"input_tokens" gorm:"not null;default:0"`
+	OutputTokens  int64     `json:"output_tokens" gorm:"not null;default:0"`
+	InputPrice    float64   `json:"-" gorm:"not null;default:0"`  // 输入单价（元/千 token），不返回给前端
+	OutputPrice   float64   `json:"-" gorm:"not null;default:0"` // 输出单价（元/千 token），不返回给前端
+	TotalCost     float64   `json:"total_cost" gorm:"not null;default:0"` // 总费用（元）
+	// 计费模式：token=按token计费，request=按次数计费
+	BillingMode string  `json:"billing_mode" gorm:"size:20;not null;default:'token'"`
+	// 按次计费相关
+	RequestCount  int64   `json:"request_count" gorm:"not null;default:0"`   // 请求次数（每次请求=1）
+	RequestPrice  float64 `json:"request_price" gorm:"not null;default:0"`   // 按次单价（元/次）
+	CreatedAt     time.Time `json:"created_at" gorm:"index"`
 }
 
 // ErrorLog 记录模型调用失败的错误日志。

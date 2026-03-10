@@ -260,12 +260,32 @@ func AddUserUsage(username string, inputTokens, outputTokens int64, inputPrice, 
 	}
 	total := inputTokens + outputTokens
 
-	totalCost := (float64(inputTokens)/1000000)*inputPrice + (float64(outputTokens)/1000000)*outputPrice
+	// 先获取用户的计费模式
+	var user User
+	err := storage.DB.Where("username = ?", username).First(&user).Error
+	if err != nil {
+		return err
+	}
 
-	return storage.DB.Model(&User{}).Where("username = ?", username).Updates(map[string]any{
-		"input_tokens":  gorm.Expr("input_tokens + ?", inputTokens),
-		"output_tokens": gorm.Expr("output_tokens + ?", outputTokens),
-		"total_tokens":  gorm.Expr("total_tokens + ?", total),
+	var totalCost float64
+	billingMode := user.BillingMode
+	if billingMode == "" {
+		billingMode = "token" // 默认按 token 计费
+	}
+
+	if billingMode == "request" {
+		// 按次数计费：费用 = 单次价格 * 1
+		totalCost = user.RequestPrice
+	} else {
+		// 按 token 计费
+		totalCost = (float64(inputTokens)/1000000)*inputPrice + (float64(outputTokens)/1000000)*outputPrice
+	}
+
+	updates := map[string]any{
+		"input_tokens":    gorm.Expr("input_tokens + ?", inputTokens),
+		"output_tokens":   gorm.Expr("output_tokens + ?", outputTokens),
+		"total_tokens":    gorm.Expr("total_tokens + ?", total),
+		"total_requests":  gorm.Expr("total_requests + 1"), // 每次请求都累计
 		"quota": gorm.Expr(`
     CASE
         WHEN quota < 0 THEN -1
@@ -274,7 +294,9 @@ func AddUserUsage(username string, inputTokens, outputTokens int64, inputPrice, 
     END
 `, totalCost, totalCost),
 		"updated_at": time.Now(),
-	}).Error
+	}
+
+	return storage.DB.Model(&User{}).Where("username = ?", username).Updates(updates).Error
 }
 
 // RecordUsageLog 记录单次请求的 token 使用日志。
@@ -295,18 +317,45 @@ func RecordUsageLog(username string, m Model, inputTokens, outputTokens int64, i
 		outputPrice = 0
 	}
 
-	totalCost := (float64(inputTokens)/1000000)*inputPrice + (float64(outputTokens)/1000000)*outputPrice
+	// 先获取用户的计费模式
+	var user User
+	err := storage.DB.Where("username = ?", username).First(&user).Error
+	if err != nil {
+		return err
+	}
+
+	billingMode := user.BillingMode
+	if billingMode == "" {
+		billingMode = "token" // 默认按 token 计费
+	}
+
+	var totalCost float64
+	var requestCount int64
+	var requestPrice float64
+
+	if billingMode == "request" {
+		// 按次数计费
+		requestCount = 1
+		requestPrice = user.RequestPrice
+		totalCost = requestPrice
+	} else {
+		// 按 token 计费
+		totalCost = (float64(inputTokens)/1000000)*inputPrice + (float64(outputTokens)/1000000)*outputPrice
+	}
 
 	log := &UsageLog{
-		Username:     username,
-		ModelID:      combo.ID,
-		InputTokens:  inputTokens,
-		OutputTokens: outputTokens,
-		InputPrice:   inputPrice,
-		OutputPrice:  outputPrice,
-		TotalCost:    totalCost,
-		Provider:     combo.Provider,
-		CreatedAt:    time.Now(),
+		Username:      username,
+		ModelID:       combo.ID,
+		InputTokens:   inputTokens,
+		OutputTokens:  outputTokens,
+		InputPrice:    inputPrice,
+		OutputPrice:   outputPrice,
+		TotalCost:     totalCost,
+		Provider:      combo.Provider,
+		BillingMode:   billingMode,
+		RequestCount:  requestCount,
+		RequestPrice:  requestPrice,
+		CreatedAt:     time.Now(),
 	}
 	return storage.DB.Create(log).Error
 }

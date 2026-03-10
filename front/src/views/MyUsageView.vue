@@ -202,6 +202,29 @@ onMounted(() => {
             </div>
           </div>
 
+          <!-- 计费模式卡 -->
+          <div class="metric-card billing-card">
+            <div class="card-icon-wrapper" style="color: #f472b6; background: rgba(244, 114, 182, 0.15); border-color: rgba(244, 114, 182, 0.3);">
+              <el-icon><Wallet /></el-icon>
+            </div>
+            <div class="card-content">
+              <div class="card-label">计费模式</div>
+              <div class="card-value">{{ usage.billing_mode === 'request' ? '按次数' : '按Token' }}</div>
+              <div v-if="usage.billing_mode === 'request'" class="remaining-percent highlight-text">{{ usage.request_price }} 额度/次</div>
+            </div>
+          </div>
+
+          <!-- 总请求次数卡 -->
+          <div class="metric-card request-card">
+            <div class="card-icon-wrapper" style="color: #34d399; background: rgba(52, 211, 153, 0.15); border-color: rgba(52, 211, 153, 0.3);">
+              <el-icon><Odometer /></el-icon>
+            </div>
+            <div class="card-content">
+              <div class="card-label">总请求次数</div>
+              <div class="card-value">{{ usage.total_requests || 0 }}</div>
+            </div>
+          </div>
+
           <!-- 过期时间卡 -->
           <div class="metric-card expire-card">
             <div class="card-icon-wrapper clock-icon">
@@ -301,24 +324,43 @@ onMounted(() => {
                 <span class="provider-badge">{{ row.provider }}</span>
               </template>
             </el-table-column>
-            <el-table-column label="输入 Token" align="right" min-width="120">
+            <el-table-column label="计费模式" width="100">
+              <template #default="{ row }">
+                <el-tag :type="row.billing_mode === 'request' ? 'warning' : 'success'" size="small">
+                  {{ row.billing_mode === 'request' ? '按次' : '按Token' }}
+                </el-tag>
+              </template>
+            </el-table-column>
+            <!-- 按次计费显示请求次数 -->
+            <el-table-column v-if="usage?.billing_mode === 'request'" label="请求次数" align="right" min-width="100">
+              <template #default="{ row }">
+                <span class="token-val">{{ row.request_count || 0 }}</span>
+              </template>
+            </el-table-column>
+            <el-table-column v-if="usage?.billing_mode === 'request'" label="单价" align="right" min-width="100">
+              <template #default="{ row }">
+                <span class="token-val">{{ row.request_price || 0 }} 额度</span>
+              </template>
+            </el-table-column>
+            <!-- 按Token计费显示token -->
+            <el-table-column v-if="usage?.billing_mode !== 'request'" label="输入 Token" align="right" min-width="120">
               <template #default="{ row }">
                 <span class="token-val input-token">{{ row.input_tokens || 0 }}</span>
               </template>
             </el-table-column>
-            <el-table-column label="输出 Token" align="right" min-width="120">
+            <el-table-column v-if="usage?.billing_mode !== 'request'" label="输出 Token" align="right" min-width="120">
               <template #default="{ row }">
                 <span class="token-val output-token">{{ row.output_tokens || 0 }}</span>
               </template>
             </el-table-column>
-            <el-table-column label="总 Token" align="right" min-width="120">
+            <el-table-column v-if="usage?.billing_mode !== 'request'" label="总 Token" align="right" min-width="120">
               <template #default="{ row }">
                 <span class="token-val total-token">{{ (row.input_tokens || 0) + (row.output_tokens || 0) }}</span>
               </template>
             </el-table-column>
             <el-table-column label="总费用" align="right" min-width="140">
               <template #default="{ row }">
-                <span class="cost-val">$ {{ row.total_cost ? row.total_cost.toFixed(6) : '0.000000' }}</span>
+                <span class="cost-val"> {{ row.total_cost ? row.total_cost.toFixed(6) : '0.000000' }}</span>
               </template>
             </el-table-column>
             <el-table-column label="时间" align="right" min-width="180">

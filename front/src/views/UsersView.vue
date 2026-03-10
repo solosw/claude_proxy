@@ -27,6 +27,8 @@ const form = reactive({
   expire_at: '',
   is_admin: false,
   allowed_combos: [],
+  billing_mode: 'token',
+  request_price: 0,
 });
 
 const rules = {};
@@ -95,6 +97,8 @@ const openCreate = () => {
     expire_at: '',
     is_admin: false,
     allowed_combos: [],
+    billing_mode: 'token',
+    request_price: 0,
   });
   dialogVisible.value = true;
 };
@@ -120,6 +124,8 @@ const openEdit = (row) => {
     expire_at: row.expire_at ? row.expire_at.slice(0, 19) : '',
     is_admin: !!row.is_admin,
     allowed_combos: allowedCombos,
+    billing_mode: row.billing_mode || 'token',
+    request_price: row.request_price || 0,
   });
   dialogVisible.value = true;
 };
@@ -131,6 +137,8 @@ const submit = () => {
       quota: Number(form.quota),
       is_admin: !!form.is_admin,
       allowed_combos: Array.isArray(form.allowed_combos) ? form.allowed_combos.join(',') : '',
+      billing_mode: form.billing_mode,
+      request_price: Number(form.request_price),
     };
     // 只有当 expire_at 有值时才添加到 payload
     if (form.expire_at && typeof form.expire_at === 'string' && form.expire_at.trim() !== '') {
@@ -310,6 +318,14 @@ onMounted(() => {
         </template>
       </el-table-column>
       <el-table-column prop="total_tokens" label="总 Token" width="120" />
+      <el-table-column label="计费模式" width="100">
+        <template #default="{ row }">
+          <el-tag :type="row.billing_mode === 'request' ? 'warning' : 'success'" size="small">
+            {{ row.billing_mode === 'request' ? '按次' : '按Token' }}
+          </el-tag>
+        </template>
+      </el-table-column>
+      <el-table-column prop="total_requests" label="总请求" width="100" />
       <el-table-column label="操作" width="240" fixed="right">
         <template #default="{ row }">
           <el-button size="small" @click="openEdit(row)">编辑</el-button>
@@ -370,6 +386,16 @@ onMounted(() => {
         <el-form-item label="管理员">
           <el-switch v-model="form.is_admin" />
         </el-form-item>
+        <el-form-item label="计费模式">
+          <el-select v-model="form.billing_mode" style="width: 100%">
+            <el-option label="按 Token 计费" value="token" />
+            <el-option label="按次数计费" value="request" />
+          </el-select>
+        </el-form-item>
+        <el-form-item v-if="form.billing_mode === 'request'" label="按次单价">
+          <el-input-number v-model="form.request_price" :min="0" :step="0.01" />
+          <span class="form-hint-inline">元/次</span>
+        </el-form-item>
         <el-form-item label="可用 Combo">
           <el-select
             v-model="form.allowed_combos"
@@ -405,6 +431,9 @@ onMounted(() => {
         <div class="usage-row"><span>输入 Token</span><strong>{{ usageData.input_tokens }}</strong></div>
         <div class="usage-row"><span>输出 Token</span><strong>{{ usageData.output_tokens }}</strong></div>
         <div class="usage-row"><span>总 Token</span><strong>{{ usageData.total_tokens }}</strong></div>
+        <div class="usage-row"><span>总请求次数</span><strong>{{ usageData.total_requests }}</strong></div>
+        <div class="usage-row"><span>计费模式</span><strong>{{ usageData.billing_mode === 'request' ? '按次数' : '按Token' }}</strong></div>
+        <div v-if="usageData.billing_mode === 'request'" class="usage-row"><span>按次单价</span><strong>{{ usageData.request_price }} 元/次</strong></div>
         <div class="usage-row"><span>额度</span><strong>{{ usageData.unlimited ? '无限' : usageData.quota }}</strong></div>
         <div class="usage-row"><span>剩余额度</span><strong>{{ usageData.unlimited ? '无限' : usageData.remaining }}</strong></div>
         <div class="usage-row"><span>过期时间</span><strong>{{ usageData.expire_at || '不过期' }}</strong></div>
