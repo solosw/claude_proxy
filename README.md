@@ -75,6 +75,7 @@ Windows 系统托盘 + WebView2 嵌入式窗口，支持窗口隐藏/显示
 | Windows GUI | ✅ | 系统托盘 + WebView2 |
 | SQLite 数据库 | ✅ | 持久化存储 |
 | Web 管理界面 | ✅ | 用户/模型/运营商/Combo 管理 |
+| GPT-5.4 兼容 | ✅ | 自动补齐 tool_search 工具，过滤不支持参数 |
 | 限流优化 | 🚧 | 开发中 |
 | Codex → Anthropic Claude | 🚧 | 计划中 |
 | Codex → OpenAI Chat | 🚧 | 计划中 |
@@ -367,19 +368,22 @@ curl -X POST "http://localhost:8090/back/v1/responses" \
 
 ### 400 `Invalid Value: 'tools.defer_loading'. Deferred tools require tools.tool_search.`
 
-**原因**：当 OpenAI Responses / Codex 请求中的某些工具设置了 `defer_loading: true` 时，`tools` 数组中必须同时包含 `tool_search` 工具。仅保留 deferred tool 而未提供 `tool_search`，上游会直接返回 400。
+**原因**：OpenAI GPT-5.4 及以上版本（包括 Codex 平台）对于设置了 `defer_loading: true` 的工具，强制要求 `tools` 数组中必须同时包含 `tool_search` 工具。仅保留 deferred tool 而未提供 `tool_search`，上游会直接返回 400 错误。
+
+**适用场景**：
+- ✅ GPT-5.4 模型的所有接口（Chat / Responses）
+- ✅ Codex 平台的 Responses 接口
 
 **解决方案**：
-- 不要移除 deferred tool
-- 保留工具定义中的 `defer_loading: true`
-- 确保 `tools` 数组中包含 `{"type": "tool_search"}`
-- ClaudeRouter 在 Responses / Codex 请求归一化阶段会自动检测：如果发现 deferred tools 但缺少 `tool_search`，会自动补齐 `tool_search`
+- 不要移除 deferred tool 的 `defer_loading: true` 属性
+- 确保 `tools` 数组中包含 `{"type": "tool_search"}` 工具定义
+- ClaudeRouter 会自动处理：在 Messages / Responses 请求归一化阶段自动检测，如果发现 deferred tools 但缺少 `tool_search`，会自动补齐，无需手动修改请求
 
-**示例**：
+**请求示例（符合 GPT-5.4 要求）**：
 
 ```json
 {
-  "model": "your-model-id",
+  "model": "gpt-5.4",
   "input": "Hello",
   "tools": [
     {
@@ -403,6 +407,12 @@ curl -X POST "http://localhost:8090/back/v1/responses" \
   ]
 }
 ```
+
+### GPT-5.4 其他不支持的参数
+GPT-5.4 已移除以下参数，ClaudeRouter 会自动在请求中过滤：
+- `previous_response_id`
+- `prompt_cache_retention`
+- `safety_identifier`
 
 ### 同会话模型未切换
 

@@ -235,9 +235,8 @@ func (h *ChatHandler) handleChatCompletions(c *gin.Context) {
 	}
 
 	if stream && streamBody != nil {
-		defer streamBody.Close()
 		c.Header("Content-Type", "text/event-stream")
-		utils.ProxySSE(c, trackUsageStream(c, streamBody, targetModel.ID, originalComboID))
+		utils.ProxySSE(c, trackUsageStream(c, rewriteSSEErrorModel(streamBody, originalComboID), targetModel.ID, originalComboID))
 		return
 	}
 

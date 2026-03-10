@@ -489,7 +489,6 @@ func (h *MessagesHandler) handleMessages(c *gin.Context) {
 
 	if stream && streamBody != nil {
 		utils.Logger.Debugf("[ClaudeRouter] messages: step=stream_write interface_type=%s response_format=%s", interfaceType, targetModel.ResponseFormat)
-		defer streamBody.Close()
 
 		if strings.EqualFold(interfaceType, "openai_responses") && !strings.EqualFold(targetModel.ResponseFormat, "openai_responses") {
 			utils.Logger.Debugf("[ClaudeRouter] messages: converting OpenAI Responses stream to Anthropic")
@@ -499,7 +498,7 @@ func (h *MessagesHandler) handleMessages(c *gin.Context) {
 				messages.ConvertOpenAIResponsesStreamToAnthropic(c.Request.Context(), streamBody, pw)
 			}()
 			c.Header("Content-Type", "text/event-stream")
-			utils.ProxySSE(c, trackUsageStream(c, pr, targetModel.ID, originalComboID))
+			utils.ProxySSE(c, trackUsageStream(c, rewriteSSEErrorModel(pr, originalComboID), targetModel.ID, originalComboID))
 			return
 		}
 		if strings.EqualFold(targetModel.ResponseFormat, "openai_responses") {
@@ -510,11 +509,11 @@ func (h *MessagesHandler) handleMessages(c *gin.Context) {
 				messages.ConvertAnthropicStreamToOpenAIResponses(c.Request.Context(), streamBody, pw)
 			}()
 			c.Header("Content-Type", "text/event-stream")
-			utils.ProxySSE(c, trackUsageStream(c, pr, targetModel.ID, originalComboID))
+			utils.ProxySSE(c, trackUsageStream(c, rewriteSSEErrorModel(pr, originalComboID), targetModel.ID, originalComboID))
 			return
 		}
 		c.Header("Content-Type", "text/event-stream")
-		utils.ProxySSE(c, trackUsageStream(c, streamBody, targetModel.ID, originalComboID))
+		utils.ProxySSE(c, trackUsageStream(c, rewriteSSEErrorModel(streamBody, originalComboID), targetModel.ID, originalComboID))
 		return
 	}
 
@@ -841,12 +840,108 @@ func trackUsageStream(c *gin.Context, src io.ReadCloser, modelID string, comboNa
 			}
 		}
 		if err := scanner.Err(); err != nil {
+			_ = pw.CloseWithError(err)
 			return
 		}
 		utils.Logger.Debugf("[ClaudeRouter] usage: upstream model=%s stream input=%d output=%d", modelID, inputTokens, outputTokens)
 		recordUsageWithModel(c, inputTokens, outputTokens, modelID, comboName)
 	}()
 	return pr
+}
+
+// rewriteSSEErrorModel 会在 SSE 流中发现错误 payload 时，将 error.model 重写为用户请求的模型名。
+// 说明：流式响应一旦开始（text/event-stream），就不能再用 JSON 错误体/HTTP 状态码直接返回；
+// 若上游在 SSE 中发出 error 事件且携带真实上游模型名，这里用于避免“错误 model 泄漏”。
+func rewriteSSEErrorModel(src io.ReadCloser, responseModel string) io.ReadCloser {
+	if src == nil {
+		return nil
+	}
+	responseModel = strings.TrimSpace(responseModel)
+	if responseModel == "" {
+		return src
+	}
+
+	pr, pw := io.Pipe()
+	go func() {
+		defer src.Close()
+
+		scanner := bufio.NewScanner(src)
+		buf := make([]byte, 0, 64*1024)
+		scanner.Buffer(buf, 8*1024*1024)
+
+		for scanner.Scan() {
+			line := scanner.Text()
+			if strings.HasPrefix(line, "data:") {
+				payload := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+				if payload != "" && payload != "[DONE]" && looksLikeJSONPayload([]byte(payload)) {
+					if rewritten := rewriteErrorModelInJSON([]byte(payload), responseModel); rewritten != nil {
+						line = "data: " + string(rewritten)
+					}
+				}
+			}
+			if _, err := pw.Write([]byte(line + "\n")); err != nil {
+				_ = pw.CloseWithError(err)
+				return
+			}
+		}
+		if err := scanner.Err(); err != nil {
+			_ = pw.CloseWithError(err)
+			return
+		}
+		_ = pw.Close()
+	}()
+	return pr
+}
+
+func rewriteErrorModelInJSON(raw []byte, responseModel string) []byte {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 || !json.Valid(trimmed) {
+		return nil
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(trimmed, &payload); err != nil || payload == nil {
+		return nil
+	}
+
+	changed := false
+	changed = setModelInErrorObject(payload, responseModel) || changed
+	if resp, _ := payload["response"].(map[string]any); resp != nil {
+		changed = setModelInErrorObject(resp, responseModel) || changed
+	}
+	if msg, _ := payload["message"].(map[string]any); msg != nil {
+		changed = setModelInErrorObject(msg, responseModel) || changed
+	}
+	if !changed {
+		return nil
+	}
+	out, err := json.Marshal(payload)
+	if err != nil {
+		return nil
+	}
+	return out
+}
+
+func setModelInErrorObject(container map[string]any, responseModel string) bool {
+	if container == nil {
+		return false
+	}
+	errObj, _ := container["error"].(map[string]any)
+	if errObj == nil {
+		return false
+	}
+	// 只在“看起来像 error”时写入，避免误伤正常事件。
+	_, hasMessage := errObj["message"].(string)
+	typ, _ := errObj["type"].(string)
+	typ = strings.ToLower(strings.TrimSpace(typ))
+	if !hasMessage && typ == "" {
+		return false
+	}
+
+	if curr, _ := errObj["model"].(string); strings.TrimSpace(curr) == responseModel {
+		return false
+	}
+	errObj["model"] = responseModel
+	return true
 }
 
 func extractUsageFromJSON(body []byte) (int64, int64) {
