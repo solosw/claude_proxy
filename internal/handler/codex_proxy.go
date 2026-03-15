@@ -331,14 +331,14 @@ func resolveResponseTargetModel(requestedModel, conversationID, inputText string
 		if fm := pickFallbackResponsesModel(requestedModel); fm != nil {
 			return fm, false, nil
 		}
-		return nil, false, errors.New("model disabled: " + m.ID)
+		return nil, false, errors.New("model disabled: " + requestedModel)
 	}
 	if modelstate.IsModelTemporarilyDisabled(m.ID) {
 		// 模型被临时禁用时，尝试选择回退模型
 		if fm := pickFallbackResponsesModel(requestedModel); fm != nil {
 			return fm, false, nil
 		}
-		return nil, false, errors.New("model temporarily disabled: " + m.ID)
+		return nil, false, errors.New("model temporarily disabled: " + requestedModel)
 	}
 	if !isCodexResponsesCandidate(m) {
 		return nil, false, errors.New("model must be operator_id=codex or interface_type in [openai_responses, openai_response, openai, openai_compatible, anthropic]")

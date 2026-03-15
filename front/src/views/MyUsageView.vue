@@ -387,7 +387,15 @@ onMounted(() => {
         <div class="guide-section glass-panel">
           <div class="section-header">
             <div class="section-icon guide-icon"><el-icon><Collection /></el-icon></div>
-            <h3 class="section-title">接入指南</h3>
+            <div style="flex:1">
+              <h3 class="section-title">接入指南</h3>
+              <p style="margin:4px 0 0;font-size:13px;color:#94a3b8;">
+                详细教程请访问：
+                <a href="http://proxy.fakestcode.xin:38321" target="_blank" style="color:#a5b4fc;text-decoration:none;font-weight:600;border-bottom:1px solid rgba(165,180,252,0.4);padding-bottom:1px;transition:color 0.2s;" onmouseover="this.style.color='#818cf8'" onmouseout="this.style.color='#a5b4fc'">
+                  http://proxy.fakestcode.xin:38321
+                </a>
+              </p>
+            </div>
           </div>
           <el-tabs v-model="activeGuideTab" class="guide-tabs custom-tabs">
             <el-tab-pane label="Claude Code" name="claude-code">

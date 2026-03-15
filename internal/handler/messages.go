@@ -204,7 +204,7 @@ func (h *MessagesHandler) handleMessages(c *gin.Context) {
 		}
 		if modelstate.IsModelTemporarilyDisabled(m.ID) {
 			utils.Logger.Warnf("[ClaudeRouter] messages: step=resolve_model err=model_temp_disabled model=%s", m.ID)
-			anthropicError(c, http.StatusBadRequest, "invalid_request_error", "Model temporarily disabled: "+m.ID)
+			anthropicError(c, http.StatusBadRequest, "invalid_request_error", "Model temporarily disabled: "+originalComboID)
 			return
 		}
 		targetModel = m
@@ -283,12 +283,12 @@ func (h *MessagesHandler) handleMessages(c *gin.Context) {
 	}
 	c.Set("real_model_id", targetModel.ID)
 	if !targetModel.Enabled {
-		anthropicError(c, http.StatusBadRequest, "invalid_request_error", "Model disabled: "+targetModel.ID)
+		anthropicError(c, http.StatusBadRequest, "invalid_request_error", "Model disabled: "+originalComboID)
 		return
 	}
 	if modelstate.IsModelTemporarilyDisabled(targetModel.ID) {
 		utils.Logger.Warnf("[ClaudeRouter] messages: step=resolve_model err=model_temp_disabled model=%s", targetModel.ID)
-		anthropicError(c, http.StatusBadRequest, "invalid_request_error", "Model temporarily disabled: "+targetModel.ID)
+		anthropicError(c, http.StatusBadRequest, "invalid_request_error", "Model temporarily disabled: "+originalComboID)
 		return
 	}
 

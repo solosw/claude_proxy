@@ -193,7 +193,7 @@ Claude API 是**无状态的**，通过 `metadata.user_id` 来标识会话。
 ### 健康检查
 - `GET /healthz`
 
-> 1/*`（无 `/back`）路由也已注册，便于本地直连调试。
+> `/v1/*`（无 `/back`）路由也已注册，便于本地直连调试。
 
 ---
 
@@ -229,7 +229,7 @@ operators:
     interface_type: "anthropic"
 
   iflow:
-   bled: true
+    enabled: true
     base_url: "https://apis.iflow.cn"
     api_key: ""
     interface_type: "openai_compatible"
@@ -303,7 +303,8 @@ go build -o main.exe ./cmd/server
 
 ### Anthropic Messages（带会话标识）
 
-``curl -X POST "http://localhost:8090/back/v1/messages" \
+```bash
+curl -X POST "http://localhost:8090/back/v1/messages" \
   -H "Authorization: Bearer your-global-api-key" \
   -H "Content-Type: application/json" \
   -d '{

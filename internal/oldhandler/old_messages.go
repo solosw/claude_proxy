@@ -120,6 +120,7 @@ func (h *MessagesHandler) handleMessages(c *gin.Context) {
 
 	requestedModel, _ := payload["model"].(string)
 	requestedModel = strings.TrimSpace(requestedModel)
+	originalComboID := requestedModel // ✅ 保存原始的 combo ID
 
 	conversationID := extractMetadataUserID(payload)
 	var cachedModelID string
@@ -131,6 +132,11 @@ func (h *MessagesHandler) handleMessages(c *gin.Context) {
 			c.Set("real_conversation_id", conversationID)
 			utils.Logger.Printf("[ClaudeRouter] messages: step=conversation_model cached user_id=%s model=%s", conversationID, requestedModel)
 
+			// ✅ 从缓存中获取原始的 combo ID
+			if comboID, ok := modelstate.GetConversationCombo(conversationID); ok {
+				originalComboID = comboID
+				utils.Logger.Printf("[ClaudeRouter] messages: step=conversation_combo cached combo=%s", comboID)
+			}
 		}
 
 	}
@@ -161,7 +167,7 @@ func (h *MessagesHandler) handleMessages(c *gin.Context) {
 		}
 		if modelstate.IsModelTemporarilyDisabled(m.ID) {
 			utils.Logger.Printf("[ClaudeRouter] messages: step=resolve_model err=model_temp_disabled model=%s", m.ID)
-			anthropicError(c, http.StatusBadRequest, "invalid_request_error", "Model temporarily disabled: "+m.ID)
+			anthropicError(c, http.StatusBadRequest, "invalid_request_error", "Model temporarily disabled: "+originalComboID)
 			return
 		}
 		targetModel = m
@@ -225,12 +231,12 @@ func (h *MessagesHandler) handleMessages(c *gin.Context) {
 	}
 	c.Set("real_model_id", targetModel.ID)
 	if !targetModel.Enabled {
-		anthropicError(c, http.StatusBadRequest, "invalid_request_error", "Model disabled: "+targetModel.ID)
+		anthropicError(c, http.StatusBadRequest, "invalid_request_error", "Model disabled: "+originalComboID)
 		return
 	}
 	if modelstate.IsModelTemporarilyDisabled(targetModel.ID) {
 		utils.Logger.Printf("[ClaudeRouter] messages: step=resolve_model err=model_temp_disabled model=%s", targetModel.ID)
-		anthropicError(c, http.StatusBadRequest, "invalid_request_error", "Model temporarily disabled: "+targetModel.ID)
+		anthropicError(c, http.StatusBadRequest, "invalid_request_error", "Model temporarily disabled: "+originalComboID)
 		return
 	}
 

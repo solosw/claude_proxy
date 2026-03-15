@@ -272,7 +272,7 @@ func resolveChatTargetModel(requestedModel, conversationID, inputText string) (*
 			return nil, false, fmt.Errorf("model disabled: %s", m.ID)
 		}
 		if modelstate.IsModelTemporarilyDisabled(m.ID) {
-			return nil, false, fmt.Errorf("model temporarily disabled: %s", m.ID)
+			return nil, false, fmt.Errorf("model temporarily disabled: %s", requestedModel)
 		}
 		return m, false, nil
 	}

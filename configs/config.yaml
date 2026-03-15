@@ -12,14 +12,29 @@ log:
     max_backups: 5
     max_age: 30
     compress: true
+tasks:
+  error_log_cleanup:
+    enabled: true
+    interval: 60m
+    retention: 12h
+
+  combo_weight:
+    enabled: true          # 注意：默认是 false，不配则不会自动调权重
+    interval: 30m          # 主人要求默认 30min（不配则用 30m）
+    window: 6h             # 统计窗口（可改）
+    min_errors_to_adjust: 3
+    lr: 0.2
+    min_weight: 0.1
+    normalize: true
+    max_step: 0.15
 
 
 database:
-  driver: sqlite # sqlite 或 mysql
-  dsn: "./data/claude_router.db" # sqlite: 文件路径; mysql: "root:password@tcp(localhost:3306)/claude_router?charset=utf8mb4&parseTime=True&loc=Local"
+#  driver: sqlite # sqlite 或 mysql
+#  dsn: "./data/claude_router.db" # sqlite: 文件路径; mysql: "root:password@tcp(localhost:3306)/claude_router?charset=utf8mb4&parseTime=True&loc=Local"
 
-#  driver: mysql # sqlite 或 mysql
-#  dsn: "solosw:123456@tcp(149.88.87.56:3306)/claude_router?charset=utf8mb4&parseTime=True&loc=Local"
+  driver: mysql # sqlite 或 mysql
+  dsn: "solosw:318210803Qq@@tcp(rm-uf6860jei04bzvg88co.mysql.rds.aliyuncs.com:3306)/claude_router?charset=utf8mb4&parseTime=True&loc=Local"
 
 
 auth:

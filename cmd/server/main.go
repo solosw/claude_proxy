@@ -109,8 +109,8 @@ func main() {
 		log.Fatalf("failed to migrate database: %v", err)
 	}
 
-	// 启动定时清理任务
-	task.StartCleanupTask()
+	// 启动后台定时任务
+	task.StartTasks(cfg)
 
 	apiRoot := router.Group("/back")
 

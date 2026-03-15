@@ -48,6 +48,29 @@ type Config struct {
 		Enabled bool `yaml:"enabled"`
 	} `yaml:"gui"`
 
+	// Tasks 定时任务相关配置（可选）。
+	Tasks struct {
+		ErrorLogCleanup struct {
+			Enabled   *bool  `yaml:"enabled"`
+			Interval  string `yaml:"interval"`  // 执行间隔，例如 30m
+			Retention string `yaml:"retention"` // 保留时长，例如 12h
+		} `yaml:"error_log_cleanup"`
+
+		ComboWeight struct {
+			Enabled           *bool    `yaml:"enabled"`
+			Interval          string   `yaml:"interval"`             // 执行间隔，例如 30m
+			Window            string   `yaml:"window"`               // 统计窗口，例如 6h
+			MinErrorsToAdjust int64    `yaml:"min_errors_to_adjust"` // 触发阈值（总错误数）
+			LR                float64  `yaml:"lr"`                   // 平滑系数(0~1)
+			MinWeight         float64  `yaml:"min_weight"`
+			Normalize         *bool    `yaml:"normalize"`
+			MaxStep           float64  `yaml:"max_step"`             // 单次最大权重变化
+			// 严重错误（429/404/403/400）的惩罚倍率，默认 3.0；其他错误倍率默认 0.3
+			SevereErrorWeight float64  `yaml:"severe_error_weight"` // 429/404/403/400 错误的权重倍率
+			MildErrorWeight   float64  `yaml:"mild_error_weight"`   // 其他错误的权重倍率
+		} `yaml:"combo_weight"`
+	} `yaml:"tasks"`
+
 	// Operators 系统内置运营商，key 为运营商 ID，选择运营商即使用此处配置的转发逻辑（BaseURL/APIKey/Interface）。
 	Operators map[string]OperatorEndpoint `yaml:"operators"`
 }
