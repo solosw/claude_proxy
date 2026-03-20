@@ -139,13 +139,20 @@ func AdjustComboWeightsByGlobalErrorLogs(window time.Duration, minErrorsToAdjust
 		}
 
 		items := make([]model.ComboItem, 0, len(cb.Items))
+		autoUpdatableCount := 0
 		for _, it := range cb.Items {
 			if strings.TrimSpace(it.ModelID) == "" {
 				continue
 			}
+			// 跳过不参与自动权重更新的项
+			if it.AutoWeightUpdate != nil && !*it.AutoWeightUpdate {
+				continue
+			}
 			items = append(items, it)
+			autoUpdatableCount++
 		}
-		if len(items) == 0 {
+		// 如果所有子模型都不参与自动更新，则跳过该 combo
+		if autoUpdatableCount == 0 {
 			continue
 		}
 

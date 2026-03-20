@@ -76,6 +76,7 @@ const openEdit = (row) => {
           model_id: item.model_id || '',
           weight: Number(item.weight) || 1,
           keywords: Array.isArray(item.keywords) ? item.keywords.join(', ') : String(item.keywords || ''),
+          auto_weight_update: item.auto_weight_update !== false,  // 默认 true
         }))
       : [],
   });
@@ -87,6 +88,7 @@ const addItem = () => {
     model_id: '',
     weight: 1,
     keywords: '',  // 改为空字符串，与表单输入框类型一致
+    auto_weight_update: true,  // 默认参与自动权重更新
   });
 };
 
@@ -113,6 +115,7 @@ const submitForm = () => {
           .split(',')
           .map(s => s.trim())
           .filter(Boolean),
+      auto_weight_update: item.auto_weight_update !== false,  // 参与自动权重更新
     })),
   };
 
@@ -178,13 +181,16 @@ onMounted(loadData);
           </el-tag>
         </template>
       </el-table-column>
-      <el-table-column label="子模型" width="260">
+      <el-table-column label="子模型" width="320">
         <template #default="{ row }">
           <div v-for="item in row.items" :key="item.model_id" class="text-xs text-gray-700">
             <span class="font-medium">{{ item.model_id }}</span>
             <span class="ml-1 text-gray-500">权重: {{ item.weight }}</span>
             <span v-if="item.keywords && item.keywords.length" class="ml-1 text-gray-400">
               关键词: {{ item.keywords.join(', ') }}
+            </span>
+            <span v-if="item.auto_weight_update === false" class="ml-1 text-orange-400">
+              [锁定]
             </span>
           </div>
         </template>
@@ -281,11 +287,19 @@ onMounted(loadData);
                   />
                 </template>
               </el-table-column>
-              <el-table-column label="关键词" width="220">
+              <el-table-column label="关键词" width="160">
                 <template #default="{ row }">
                   <el-input
                     v-model="row.keywords"
                     placeholder="用逗号分隔，例如: 图表, 文本"
+                  />
+                </template>
+              </el-table-column>
+              <el-table-column label="自动调权" width="100">
+                <template #default="{ row }">
+                  <el-switch
+                    v-model="row.auto_weight_update"
+                    size="small"
                   />
                 </template>
               </el-table-column>

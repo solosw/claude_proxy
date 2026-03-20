@@ -51,9 +51,10 @@ type ComboItem struct {
 	ID      uint   `json:"-" gorm:"primaryKey"`
 	ComboID string `json:"-" gorm:"index"` // 外键，指向 Combo.ID
 
-	ModelID  string      `json:"model_id"`
-	Weight   float64     `json:"weight"`
-	Keywords StringSlice `json:"keywords,omitempty" gorm:"type:text"`
+	ModelID         string      `json:"model_id"`
+	Weight          float64     `json:"weight"`
+	Keywords        StringSlice `json:"keywords,omitempty" gorm:"type:text"`
+	AutoWeightUpdate *bool      `json:"auto_weight_update" gorm:"not null;default:true"` // 是否参与自动权重更新
 }
 
 // Combo 表示一个组合模型（虚拟模型），对外表现为一个普通模型 ID。

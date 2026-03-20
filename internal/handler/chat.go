@@ -42,11 +42,15 @@ func NewChatHandler(cfg *appconfig.Config) *ChatHandler {
 func (h *ChatHandler) RegisterRoutes(r gin.IRoutes) {
 	r.POST("/v1/chat/completions", h.handleChatCompletions)
 	r.OPTIONS("/v1/chat/completions", h.handleOptions)
+	r.GET("/v1/models", h.handleModels)
+	r.OPTIONS("/v1/models", h.handleOptions)
 }
 
 func (h *ChatHandler) RegisterRoutesV1(r gin.IRoutes) {
 	r.POST("/chat/completions", h.handleChatCompletions)
 	r.OPTIONS("/chat/completions", h.handleOptions)
+	r.GET("/models", h.handleModels)
+	r.OPTIONS("/models", h.handleOptions)
 }
 
 func (h *ChatHandler) handleOptions(c *gin.Context) {
@@ -82,6 +86,38 @@ func openaiErrorFromBody(c *gin.Context, statusCode int, body []byte, responseMo
 		return
 	}
 	openaiError(c, statusCode, errorType, message)
+}
+
+func (h *ChatHandler) handleModels(c *gin.Context) {
+	currentUser := middleware.CurrentUser(c)
+	combos := model.ListCombos()
+	data := make([]gin.H, 0, len(combos))
+	for _, cb := range combos {
+		if cb == nil || !cb.Enabled {
+			continue
+		}
+		if currentUser != nil && !currentUser.IsAdmin {
+			if err := checkUserModelPermission(currentUser, cb.ID); err != nil {
+				continue
+			}
+		}
+		data = append(data, gin.H{
+			"id":      cb.ID,
+			"object":  "model",
+			"created": 0,
+			"owned_by": func() string {
+				provider := strings.TrimSpace(cb.Provider)
+				if provider != "" {
+					return provider
+				}
+				return "clauderouter"
+			}(),
+		})
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"object": "list",
+		"data":   data,
+	})
 }
 
 func (h *ChatHandler) handleChatCompletions(c *gin.Context) {
