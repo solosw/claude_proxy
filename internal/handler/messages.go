@@ -292,6 +292,12 @@ func (h *MessagesHandler) handleMessages(c *gin.Context) {
 		return
 	}
 
+	//if matched, isGreet := matchesInterceptPattern(inputText); matched {
+	//	if interceptAnthropicReply(c, originalComboID, stream, isGreet) {
+	//		return
+	//	}
+	//}
+
 	upstreamID := strings.TrimSpace(targetModel.UpstreamID)
 	if upstreamID == "" {
 		upstreamID = requestedModel
@@ -440,7 +446,7 @@ func (h *MessagesHandler) handleMessages(c *gin.Context) {
 		if conversationID != "" {
 			modelstate.ClearConversationModel(conversationID)
 		}
-		modelstate.DisableModelTemporarily(targetModel.ID, modelstate.TemporaryModelDisableTTL)
+		modelstate.DisableModelTemporarily(targetModel.ID, modelstate.DisableTTL)
 
 		// 写入错误日志
 		username := ""
@@ -472,7 +478,7 @@ func (h *MessagesHandler) handleMessages(c *gin.Context) {
 		if conversationID != "" {
 			modelstate.ClearConversationModel(conversationID)
 		}
-		modelstate.DisableModelTemporarily(targetModel.ID, modelstate.TemporaryModelDisableTTL)
+		modelstate.DisableModelTemporarily(targetModel.ID, modelstate.DisableTTL)
 
 		// 写入错误日志
 		username := ""

@@ -116,6 +116,12 @@ func (h *CodexProxyHandler) handleResponses(c *gin.Context) {
 		c.Set("real_conversation_id", conversationID)
 	}
 
+	//if matched, isGreet := matchesInterceptPattern(inputText); matched {
+	//	if interceptOpenAIResponsesReply(c, originalComboID, stream, isGreet) {
+	//		return
+	//	}
+	//}
+
 	interfaceType, baseURL, apiKey, resolveErr := h.resolveResponsesEndpoint(targetModel)
 	if resolveErr != nil {
 		openaiError(c, http.StatusBadRequest, "invalid_request_error", resolveErr.Error())
@@ -184,7 +190,7 @@ func (h *CodexProxyHandler) handleResponses(c *gin.Context) {
 			modelstate.ClearConversationModel(conversationID)
 		}
 		if shouldTemporarilyDisableResponsesModel(statusCode, execErr) {
-			modelstate.DisableModelTemporarily(targetModel.ID, modelstate.TemporaryModelDisableTTL)
+			modelstate.DisableModelTemporarily(targetModel.ID, modelstate.DisableTTL)
 		}
 		// 写入错误日志
 		username := ""
@@ -212,7 +218,7 @@ func (h *CodexProxyHandler) handleResponses(c *gin.Context) {
 			modelstate.ClearConversationModel(conversationID)
 		}
 		if shouldTemporarilyDisableResponsesModel(statusCode, nil) {
-			modelstate.DisableModelTemporarily(targetModel.ID, modelstate.TemporaryModelDisableTTL)
+			modelstate.DisableModelTemporarily(targetModel.ID, modelstate.DisableTTL)
 		}
 		// 写入错误日志
 		username := ""

@@ -1,6 +1,7 @@
 package modelstate
 
 import (
+	"fmt"
 	"strings"
 	"sync"
 	"time"
@@ -22,11 +23,10 @@ type ConversationModelEntry struct {
 	LastSeen time.Time
 }
 
-const (
-	TemporaryModelDisableTTL = 1 * time.Minute
-	ConversationModelTTL     = 2 *
-		TemporaryModelDisableTTL
-	ConversationModelCleanupInterval = ConversationModelTTL / 2
+var (
+	DisableTTL         = 1 * time.Minute
+	ConversationModelTTL                = 2 * DisableTTL
+	ConversationModelCleanupInterval     = ConversationModelTTL / 2
 )
 
 func init() {
@@ -47,6 +47,26 @@ func init() {
 			CleanupConversationModels()
 		}
 	}()
+}
+
+// SetDisableTTL 从外部配置加载模型禁用 TTL，返回解析后的实际值。
+func SetDisableTTL(ttlStr string) error {
+	ttlStr = strings.TrimSpace(ttlStr)
+	if ttlStr == "" {
+		DisableTTL = 1 * time.Minute
+		return nil
+	}
+	d, err := time.ParseDuration(ttlStr)
+	if err != nil {
+		return fmt.Errorf("invalid disable_ttl %q: %w", ttlStr, err)
+	}
+	if d <= 0 {
+		return fmt.Errorf("disable_ttl must be positive, got %s", ttlStr)
+	}
+	DisableTTL = d
+	ConversationModelTTL = 2 * DisableTTL
+	ConversationModelCleanupInterval = ConversationModelTTL / 2
+	return nil
 }
 
 // DisableModelTemporarily 临时禁用指定模型

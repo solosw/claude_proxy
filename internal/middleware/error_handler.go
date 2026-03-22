@@ -41,7 +41,7 @@ func ErrorHandler() gin.HandlerFunc {
 			modelID := extractModelIDFromRequest(c)
 			if modelID != "" {
 				// 禁用模型 15 分钟
-				modelstate.DisableModelTemporarily(modelID, modelstate.TemporaryModelDisableTTL)
+				modelstate.DisableModelTemporarily(modelID, modelstate.DisableTTL)
 				utils.Logger.Printf("[ClaudeRouter] error_handler: model_disabled model=%s status=%d", modelID, statusCode)
 			}
 			conversionID := extractConversationIDFromRequest(c)

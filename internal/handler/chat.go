@@ -183,6 +183,12 @@ func (h *ChatHandler) handleChatCompletions(c *gin.Context) {
 		c.Set("real_conversation_id", conversationID)
 	}
 
+	//if matched, isGreet := matchesInterceptPattern(inputText); matched {
+	//	if interceptOpenAIChatReply(c, originalComboID, stream, isGreet) {
+	//		return
+	//	}
+	//}
+
 	upstreamModel := strings.TrimSpace(targetModel.UpstreamID)
 	if upstreamModel == "" {
 		upstreamModel = targetModel.ID
@@ -230,7 +236,7 @@ func (h *ChatHandler) handleChatCompletions(c *gin.Context) {
 			modelstate.ClearConversationModel(conversationID)
 		}
 		if shouldTemporarilyDisableChatModel(statusCode, execErr) {
-			modelstate.DisableModelTemporarily(targetModel.ID, modelstate.TemporaryModelDisableTTL)
+			modelstate.DisableModelTemporarily(targetModel.ID, modelstate.DisableTTL)
 		}
 		// 写入错误日志
 		username := ""
@@ -258,7 +264,7 @@ func (h *ChatHandler) handleChatCompletions(c *gin.Context) {
 			modelstate.ClearConversationModel(conversationID)
 		}
 		if shouldTemporarilyDisableChatModel(statusCode, nil) {
-			modelstate.DisableModelTemporarily(targetModel.ID, modelstate.TemporaryModelDisableTTL)
+			modelstate.DisableModelTemporarily(targetModel.ID, modelstate.DisableTTL)
 		}
 		// 写入错误日志
 		username := ""

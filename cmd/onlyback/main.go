@@ -5,6 +5,7 @@ import (
 	"awesomeProject/internal/handler"
 	"awesomeProject/internal/middleware"
 	"awesomeProject/internal/model"
+	"awesomeProject/internal/modelstate"
 	"awesomeProject/internal/oldhandler"
 	"awesomeProject/internal/storage"
 	"awesomeProject/internal/task"
@@ -22,6 +23,11 @@ func main() {
 	}
 	// 初始化日志级别
 	utils.InitLogger(cfg.Log.Level)
+
+	// 初始化模型禁用 TTL
+	if err := modelstate.SetDisableTTL(cfg.ModelDisable.DisableTTL); err != nil {
+		log.Printf("warning: failed to set disable_ttl: %v, using default", err)
+	}
 	if cfg.Server.Debug {
 		gin.SetMode(gin.DebugMode)
 	} else {

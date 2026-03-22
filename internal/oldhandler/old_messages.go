@@ -369,7 +369,7 @@ func (h *MessagesHandler) handleMessages(c *gin.Context) {
 		if conversationID != "" {
 			modelstate.ClearConversationModel(conversationID)
 		}
-		modelstate.DisableModelTemporarily(targetModel.ID, modelstate.TemporaryModelDisableTTL)
+		modelstate.DisableModelTemporarily(targetModel.ID, modelstate.DisableTTL)
 
 		if c.Request.Context().Err() != nil {
 			utils.Logger.Printf("[ClaudeRouter] messages: client_gone, skip error response")
@@ -398,7 +398,7 @@ func (h *MessagesHandler) handleMessages(c *gin.Context) {
 		if conversationID != "" {
 			modelstate.ClearConversationModel(conversationID)
 		}
-		modelstate.DisableModelTemporarily(targetModel.ID, modelstate.TemporaryModelDisableTTL)
+		modelstate.DisableModelTemporarily(targetModel.ID, modelstate.DisableTTL)
 
 		upstreamMsg := extractUpstreamErrorMessage(body)
 		utils.Logger.Printf("[ClaudeRouter] messages: step=upstream_error status=%d message=%s", statusCode, upstreamMsg)

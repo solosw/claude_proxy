@@ -1,6 +1,9 @@
 server:
   addr: "localhost:8090"
   debug: true
+
+model_disable:
+  disable_ttl : 3m
 gui:
   enabled: false
 log:

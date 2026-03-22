@@ -73,6 +73,10 @@ type Config struct {
 
 	// Operators 系统内置运营商，key 为运营商 ID，选择运营商即使用此处配置的转发逻辑（BaseURL/APIKey/Interface）。
 	Operators map[string]OperatorEndpoint `yaml:"operators"`
+
+	ModelDisable struct {
+		DisableTTL string `yaml:"disable_ttl"` // 模型临时禁用的 TTL，如 "1m"，默认 "1m"
+	} `yaml:"model_disable"`
 }
 
 // Load 从给定路径加载 YAML 配置，并返回 Config。
